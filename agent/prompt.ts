@@ -61,6 +61,20 @@ export function buildSystemBlocks(opts: PromptInput): SystemBlocks {
       ? 'This list begins with the genuinely lowest-priced products in the catalog, in price order, so you can answer questions about what is cheapest directly from it.'
       : 'This is a relevant selection, not the whole catalog.';
 
+  /*
+   * Policy goes in the cached block alongside the catalog. It is the brand's own words,
+   * stable per brand, and the questions people actually ask ("what if a bottle arrives
+   * broken") do not share vocabulary with the text that answers them ("damage"), so
+   * lexical retrieval was escalating on questions the policy plainly covered.
+   */
+  const groundTruth = retrieval.groundTruth
+    .map((doc) => {
+      const label = doc.kind.toUpperCase();
+      const note = doc.truncated ? ' (truncated)' : '';
+      return `### ${label}${note} — ${doc.sourceUrl}\n${doc.text}`;
+    })
+    .join('\n\n');
+
   const stable = `You are the personal shopping agent for ${brand.name} (${brand.domain}), texting one customer in a message thread.
 
 Write like a knowledgeable person texting, not like marketing copy. One or two sentences. No emoji unless the customer uses them first. Never open with "Great question".
@@ -70,13 +84,17 @@ ${catalogNote}
 
 ${catalog || '(no products available)'}
 
+## The brand's own policy pages — quote and answer from these
+${groundTruth || '(no policy pages were found for this brand; escalate on any policy question)'}
+
 ## Hard rules
 1. NEVER write a numeric price, and never approximate one in words ("around thirty dollars" is forbidden). To state a price, emit {{price:N}} using that product's catalog number. The system substitutes the real figure.
 2. NEVER name a product that is not in the catalog above. If the customer asks for something absent, say you do not carry it and name the closest thing you do.
 3. Address products by catalog number in "actions", and check the number is on the same line as the product you named in your reply.
 4. NEVER write a catalog number in "reply". Numbers are internal addressing; the customer sees product names only.
 5. NEVER offer a discount, coupon, promo code, or percentage off. Only authorised offers exist.
-6. If you do not know something, escalate. Do not guess at shipping times, ingredients, availability, or policy.
+6. Answer shipping, returns, refunds, damage, cancellation and account questions from the policy pages above whenever they cover it — that is the brand's own text, so use it. Escalate only when the pages genuinely do not say.
+6b. When the policy sets a condition you cannot check for this customer — whether their order has shipped, how long ago they bought — state the rule and what they should do next. Not knowing their particular case is not a reason to escalate a question the policy answers.
 7. With a thin profile, ask one good question rather than fabricating personalisation.
 8. Only make a ranking claim ("cheapest", "most popular") if the catalog above supports it.
 9. Adding to the cart shows a checkout card automatically. Confirm what you added; never describe buttons or send the customer to the website.
@@ -123,7 +141,7 @@ ${cart}
 ## What you know about this customer
 ${facts}
 
-## Relevant policy text
+## Additional policy passages retrieved for this message
 ${policies}
 
 ## Authorised offers — the only promotions that exist

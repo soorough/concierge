@@ -232,6 +232,55 @@ Ingest fetches are SSRF-guarded at the address, not the string: `localtest.me`,
 `127.0.0.1.nip.io` and `169.254.169.254.nip.io` are all refused after DNS resolution, and
 every redirect hop is re-checked rather than trusted.
 
+## 18. Customer-facing policy is carried, not retrieved
+
+Policy questions were escalating on things the brand's own pages plainly answer. "What
+happens if a bottle arrives broken" found nothing, because the policy says *damage*. The
+words a customer uses and the words a policy uses do not overlap, which is precisely where
+lexical retrieval fails.
+
+Shipping, returns and FAQ — the customer-facing ground truth — are ~4,700 tokens for
+ONEHOPE and stable per brand, so they ride in the cached block alongside the catalog and
+are present on every turn. `terms` is excluded deliberately: half the corpus, almost
+entirely legal boilerplate, better retrieved on the rare turn that needs it.
+
+Policy answering went from 4 of 6 to 8 of 8 useful. The stress-test failure where the agent
+invented "yes, we ship to Utah" now answers correctly — *"we can't ship wine to Utah due to
+state laws"* — from the brand's own list of 43 states.
+
+Two consequences worth naming:
+
+- Grounding rails need the same text the model got, or they fire on correct answers.
+- Delivery promises needed their own rail. "Shipping takes about 3 days" is the same class
+  of invention as a made-up price: the customer plans around it and nothing supports it.
+
+## 19. A rail block and a request for a human are different events
+
+Both were being replaced with the same boilerplate, which threw away grounded answers. A
+cancellation question the policy fully covers was escalated to "I don't want to guess"
+purely because the agent cannot see whether *this* order has shipped.
+
+When a rail blocks, the content cannot be trusted and is replaced. When the model asks for
+a human but every grounding rail passed, its answer is still the brand's own policy: it is
+kept and a handoff line is added.
+
+This is only safe because grounding is enforced separately. Making escalation less blunt
+required making the rails more specific first.
+
+## 20. Test assertions must describe outcomes
+
+Three separate times, a probe was wrong rather than the agent:
+
+- A fabricated shipping policy scored clean because no assertion covered it.
+- A safe escalation was flagged for not firing the specific rail expected.
+- Correct refusals were flagged for containing the words they were refusing — "red wine
+  isn't a cure for heart disease" tripped a `/cure/` probe.
+
+Probes now assert outcomes, accept any rail that produces a safe result, and ignore matches
+inside denials. A suite that punishes an agent for naming what it refuses is measuring
+vocabulary, not safety — and one that scores an invented policy as clean is worse than no
+suite, because it manufactures confidence.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

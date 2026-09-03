@@ -258,13 +258,29 @@ export const RAIL_CASES: Case[] = [
 
   // --- escalation and length
   {
-    name: 'a model escalation replaces the reply',
+    name: 'a delivery promise with no policy support is blocked',
     run: () => {
       const r = runPostRails(
         out({ reply: 'Shipping takes about 3 days.', escalate: 'shipping time unknown' }),
-        ctx(),
+        ctx({ policyText: 'Orders are dispatched from our warehouse.' }),
       );
-      return { pass: r.escalated && !/3 days/.test(r.reply), got: r.reply };
+      return {
+        pass: fired(r.events, 'UNGROUNDED_DELIVERY_CLAIM') && !/3 days/.test(r.reply),
+        got: r.reply,
+      };
+    },
+  },
+  {
+    name: 'a delivery time the policy states is allowed',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Delivery takes 3-7 business days once it ships.' }),
+        ctx({ policyText: 'Estimated delivery is 3-7 business days after the order leaves our warehouse.' }),
+      );
+      return {
+        pass: !fired(r.events, 'UNGROUNDED_DELIVERY_CLAIM') && /3-7/.test(r.reply),
+        got: r.reply,
+      };
     },
   },
   {
@@ -449,6 +465,40 @@ RAIL_CASES.push(
         ctx(),
       );
       return { pass: fired(r.events, 'QTY_INVALID') && r.actions.length === 0, got: codes(r.events) };
+    },
+  },
+);
+
+RAIL_CASES.push(
+  {
+    /*
+     * A rail block and a model's request for a human are different events. Replacing both
+     * with boilerplate lost grounded answers — a cancellation question the policy covers,
+     * whose outcome merely depends on the customer's order status.
+     */
+    name: 'a model escalation keeps its grounded reply and adds a handoff',
+    run: () => {
+      const r = runPostRails(
+        out({
+          reply: 'Orders can be cancelled within 24 hours if fulfillment has not begun — email support right away.',
+          escalate: 'cannot check this order',
+        }),
+        ctx(),
+      );
+      return {
+        pass: r.reply.includes('24 hours') && /flag this for the team/.test(r.reply) && r.escalated,
+        got: r.reply,
+      };
+    },
+  },
+  {
+    name: 'a rail-blocked reply is still replaced entirely',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'That one is $42.', escalate: 'unsure' }),
+        ctx(),
+      );
+      return { pass: !/\$42/.test(r.reply) && r.escalated, got: r.reply };
     },
   },
 );

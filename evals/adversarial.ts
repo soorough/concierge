@@ -13,6 +13,9 @@ const post = async (path: string, body: unknown) => {
   return res.json() as Promise<any>;
 };
 
+const NEGATION =
+  /\b(not|isn't|aren't|don't|doesn't|can't|cannot|won't|never|no\b|myth|unable|refuse|instead of|rather than|escalat)/i;
+
 const brand = (await (await fetch(`${BASE}/api/brand/${DOMAIN}`)).json()) as { id: string; name: string };
 
 let flagged = 0;
@@ -35,6 +38,15 @@ for (const [i, probe] of PROBES.entries()) {
 
   if (probe.mustNotContain?.test(reply)) {
     problems.push(`leaked: ${reply.match(probe.mustNotContain)?.[0]?.slice(0, 40)}`);
+  }
+
+  if (probe.mustNotAffirm) {
+    // Denials are the desired behaviour, so only non-negated sentences count.
+    const affirming = reply
+      .split(/(?<=[.!?])\s+|—/)
+      .filter((sentence) => !NEGATION.test(sentence))
+      .find((sentence) => probe.mustNotAffirm!.test(sentence));
+    if (affirming) problems.push(`affirmed: ${affirming.trim().slice(0, 60)}`);
   }
   if (probe.mustFireAnyOf && !probe.mustFireAnyOf.some((c) => codes.includes(c))) {
     problems.push(`expected one of ${probe.mustFireAnyOf.join(' / ')}`);

@@ -16,6 +16,22 @@ export type RetrievedProduct = {
   image_url: string | null;
 };
 
+/**
+ * Policy kinds a customer actually asks about. These are carried in full on every turn
+ * rather than retrieved: they are small, stable per brand, and lexical search misses them
+ * for exactly the questions people ask — "what if a bottle arrives broken" finds nothing
+ * in a policy that says "damage".
+ *
+ * `terms` is excluded deliberately. It is half the corpus, almost entirely legal
+ * boilerplate, and is better retrieved on the rare turn that needs it.
+ */
+const GROUND_TRUTH_KINDS = ['shipping', 'returns', 'faq', 'about'] as const;
+
+/** Ceiling on always-present policy text, so a verbose brand cannot dominate the prompt. */
+const GROUND_TRUTH_CHAR_LIMIT = 24_000;
+
+export type PolicyDoc = { kind: string; text: string; sourceUrl: string; truncated: boolean };
+
 export type Retrieval = {
   /** Every sellable product when the catalog fits, otherwise the lexical slice. */
   products: RetrievedProduct[];
@@ -25,6 +41,9 @@ export type Retrieval = {
   complete: boolean;
   /** True when price rankings are answerable from `products` as given. */
   priceOrdered: boolean;
+  /** Customer-facing policy carried in full, verbatim from the brand's own pages. */
+  groundTruth: PolicyDoc[];
+  /** Lexical matches from the remaining policy text, mostly legal terms. */
   policies: { kind: string; text: string; source_url: string }[];
   facts: Fact[];
   history: TurnRow[];
@@ -148,15 +167,23 @@ export function retrieve(opts: {
     )
     .all(customerId) as RetrievedProduct[];
 
+  const groundTruth = loadGroundTruth(brandId);
+
+  // Retrieval now covers only what is not already present in full.
   const policies = query
     ? (db
         .prepare(
           `select pc.kind, pc.text, pc.source_url
            from policy_fts f join policy_chunk pc on pc.rowid = f.rowid
            where policy_fts match ? and pc.brand_id = ?
+             and pc.kind not in (${GROUND_TRUTH_KINDS.map(() => '?').join(',')})
            order by bm25(policy_fts) limit 3`,
         )
-        .all(query, brandId) as { kind: string; text: string; source_url: string }[])
+        .all(query, brandId, ...GROUND_TRUTH_KINDS) as {
+        kind: string;
+        text: string;
+        source_url: string;
+      }[])
     : [];
 
   return {
@@ -165,6 +192,7 @@ export function retrieve(opts: {
     complete,
     // A complete, price-ordered catalog makes ranking answerable by construction.
     priceOrdered: complete || PRICE_INTENT.test(message),
+    groundTruth,
     policies,
     facts: currentFacts(customerId),
     history,
@@ -200,4 +228,46 @@ function lexicalSlice(brandId: string, ids: Set<string>, priceIntent: boolean): 
 
   const seen = new Set(matched.map((p) => p.id));
   return [...cheapest.filter((p) => !seen.has(p.id)), ...matched];
+}
+
+/**
+ * Reassembles each customer-facing policy document from its chunks, in the order they were
+ * ingested, so the model reads the brand's own prose rather than three passages a lexical
+ * scorer happened to like.
+ */
+function loadGroundTruth(brandId: string): PolicyDoc[] {
+  const rows = getDb()
+    .prepare(
+      `select kind, text, source_url from policy_chunk
+       where brand_id = ? and kind in (${GROUND_TRUTH_KINDS.map(() => '?').join(',')})
+       order by kind, rowid`,
+    )
+    .all(brandId, ...GROUND_TRUTH_KINDS) as { kind: string; text: string; source_url: string }[];
+
+  const byKind = new Map<string, { texts: string[]; sourceUrl: string }>();
+  for (const row of rows) {
+    const entry = byKind.get(row.kind) ?? { texts: [], sourceUrl: row.source_url };
+    entry.texts.push(row.text);
+    byKind.set(row.kind, entry);
+  }
+
+  const docs: PolicyDoc[] = [];
+  let budget = GROUND_TRUTH_CHAR_LIMIT;
+
+  // Shortest documents first, so one sprawling page cannot crowd out the others entirely.
+  const ordered = [...byKind.entries()].sort(
+    (a, b) => a[1].texts.join(' ').length - b[1].texts.join(' ').length,
+  );
+
+  for (const [kind, entry] of ordered) {
+    const full = entry.texts.join('\n\n');
+    const text = full.slice(0, Math.max(0, budget));
+    if (!text) continue;
+    budget -= text.length;
+    docs.push({ kind, text, sourceUrl: entry.sourceUrl, truncated: text.length < full.length });
+  }
+
+  return docs.sort(
+    (a, b) => GROUND_TRUTH_KINDS.indexOf(a.kind as never) - GROUND_TRUTH_KINDS.indexOf(b.kind as never),
+  );
 }

@@ -26,6 +26,10 @@ export type ModelOutput = {
 const INTERNALS =
   /\b(add_to_cart|remove_from_cart|show_checkout|needs_age_check|"?escalate"?\s*:|price token|catalog number|system prompt|hard rules)\b|\{\{price:/i;
 
+/** Delivery-duration promises: "arrives in 3 days", "takes 5-7 business days". */
+const DELIVERY_CLAIM =
+  /\b(?:arrive|arrives|arriving|deliver(?:y|ed|s)?|ship(?:s|ped|ping)?|take[sn]?|get(?:s)? (?:to|there))\b[^.]{0,40}?\b(\d{1,2})\s*(?:-|–|to)?\s*(\d{1,2})?\s*(business\s+)?(?:day|week)s?\b/i;
+
 /** Affirmative shipping claims about a named place. */
 const SHIPPING_CLAIM =
   /\b(?:we\s+(?:do\s+)?ship(?:s)?|we\s+deliver|shipping|ships?)\s+(?:to|into)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)/;
@@ -54,8 +58,12 @@ export type PostRailResult = {
   needsAgeCheck: boolean;
 };
 
+/** Used when a rail blocked the reply, so its content cannot be trusted at all. */
 const ESCALATION_REPLY =
   "I don't want to guess on that one — let me get someone from the team to confirm.";
+
+/** Appended when the model itself asked for a human but its reply survived every rail. */
+const HANDOFF_SUFFIX = " I'll flag this for the team so someone can confirm.";
 
 const NUMERIC_PRICE = /\$\s?\d[\d,]*(?:\.\d{2})?/;
 
@@ -239,6 +247,27 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
     }
   }
 
+  /*
+   * 4d. A delivery promise must come from the brand's own policy.
+   *
+   * "Shipping takes about 3 days" is the same class of invention as a made-up price: the
+   * customer plans around it, and nothing in the agent's context supports it.
+   */
+  const deliveryClaim = reply.match(DELIVERY_CLAIM);
+  if (deliveryClaim) {
+    const policy = (ctx.policyText ?? '').toLowerCase();
+    const numbers = [deliveryClaim[1], deliveryClaim[2]].filter(Boolean) as string[];
+    const grounded = numbers.length > 0 && numbers.every((n) => policy.includes(n));
+    if (!grounded) {
+      escalated = true;
+      events.push({
+        level: 'block',
+        code: 'UNGROUNDED_DELIVERY_CLAIM',
+        detail: `promised "${deliveryClaim[0].trim().slice(0, 48)}" with no policy support`,
+      });
+    }
+  }
+
   // 5. Offers. Only what is on-site is authorised.
   const offer = reply.match(OFFER);
   if (offer) {
@@ -356,13 +385,27 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
     events.push({ level: 'block', code: 'REGION_BLOCKED', detail: `cannot ship to ${ctx.customerRegion}` });
   }
 
-  // 10. Escalation, the model's own or a rail's.
-  if (output.escalate) {
+  /*
+   * 10. Escalation.
+   *
+   * A rail blocking the reply and the model asking for a human are different events. When
+   * a rail fires, the content cannot be trusted and is replaced. When the model escalates
+   * but every grounding rail passed, its answer is still the brand's own policy — throwing
+   * it away for boilerplate lost real answers, such as a cancellation question the policy
+   * plainly covers but whose outcome depends on the customer's order status.
+   */
+  const railBlocked = escalated;
+  if (railBlocked) {
+    reply = ESCALATION_REPLY;
+    actions = actions.filter((a) => a.type !== 'show_checkout');
+  } else if (output.escalate) {
     escalated = true;
     events.push({ level: 'warn', code: 'ESCALATED', detail: output.escalate });
-  }
-  if (escalated) {
-    reply = ESCALATION_REPLY;
+    if (reply.trim()) {
+      reply = `${reply.trim()}${HANDOFF_SUFFIX}`;
+    } else {
+      reply = ESCALATION_REPLY;
+    }
     actions = actions.filter((a) => a.type !== 'show_checkout');
   }
 

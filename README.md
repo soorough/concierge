@@ -4,11 +4,16 @@ Paste a brand's domain. Seconds later you're texting an agent that knows their r
 catalog, their real prices, and their real policies, and can hand you a real cart.
 
 - **Spec:** [SPEC.md](SPEC.md)
+- **What it supports, and what it does not:** [CAPABILITIES.md](CAPABILITIES.md)
 - **Why it's built this way:** [DECISIONS.md](DECISIONS.md)
 
 ## Status
 
-Early. Schema, sellability filter, and FTS5 retrieval verified against a live catalog.
+Working end to end against a live Shopify catalog: ingest, agent turns, deterministic
+rails, an append-only fact ledger, and a real cart handoff.
+
+- `npm run evals` — 51 deterministic cases, no API key required
+- `npm run stress` — 29 adversarial probes against a running agent
 
 ## Run
 
