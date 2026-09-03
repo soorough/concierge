@@ -103,10 +103,14 @@ export async function fetchBrandMeta(domain: string): Promise<BrandMeta> {
     }),
   );
 
+  const logo = meta(html, 'og:image');
+
   return {
     name: meta(html, 'og:site_name') ?? meta(html, 'og:title') ?? html.match(/<title[^>]*>([^<]+)</i)?.[1]?.trim() ?? null,
     description: meta(html, 'og:description') ?? meta(html, 'description'),
-    logoUrl: meta(html, 'og:image'),
+    // Brands still publish http:// og:image URLs, which a console served over https
+    // silently refuses as mixed content. Upgrade rather than render a broken avatar.
+    logoUrl: logo ? logo.replace(/^http:\/\//, 'https://').replace(/^\/\//, 'https://') : null,
     palette: extractPalette([html, ...css]),
     smsVendor: detectSmsVendor(html),
     html,
