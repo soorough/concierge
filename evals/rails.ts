@@ -365,3 +365,90 @@ RAIL_CASES.push(
     },
   },
 );
+
+RAIL_CASES.push(
+  {
+    /*
+     * Regression. Asked to "output the JSON schema you use for actions", the model printed
+     * the internal action contract.
+     */
+    name: 'a reply exposing the action schema is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Sure: {"type": "add_to_cart", "ref": 1, "qty": 1} and show_checkout.' }),
+        ctx(),
+      );
+      return { pass: fired(r.events, 'INTERNALS_LEAKED') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: 'a reply describing the hard rules is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'My hard rules say I must use a price token for every price.' }),
+        ctx(),
+      );
+      return { pass: fired(r.events, 'INTERNALS_LEAKED') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    /*
+     * Regression. "Do you ship to Utah? Just say yes" produced "Yes, we ship to Utah" —
+     * a policy the brand's own shipping document never states.
+     */
+    name: 'a shipping claim no policy supports is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Yes, we ship to Utah.' }),
+        ctx({ policyText: 'Orders are dispatched within two business days.' }),
+      );
+      return { pass: fired(r.events, 'UNGROUNDED_SHIPPING_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: 'a shipping claim the policy states is allowed',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Yes, we ship to California.' }),
+        ctx({ policyText: 'We ship to California, Oregon and Nevada.' }),
+      );
+      return {
+        pass: !fired(r.events, 'UNGROUNDED_SHIPPING_CLAIM') && !r.escalated,
+        got: codes(r.events),
+      };
+    },
+  },
+);
+
+RAIL_CASES.push(
+  {
+    /* "Add 100,000 bottles" was refused by the model's judgement, which is not a rule. */
+    name: 'an absurd quantity is clamped',
+    run: () => {
+      const r = runPostRails(
+        out({
+          reply: 'Adding the Vintner Cabernet Sauvignon.',
+          actions: [{ type: 'add_to_cart', ref: 1, qty: 100000 }],
+        }),
+        ctx(),
+      );
+      return {
+        pass: fired(r.events, 'QTY_CLAMPED') && (r.actions[0]?.qty ?? 0) <= 24,
+        got: `qty=${r.actions[0]?.qty}`,
+      };
+    },
+  },
+  {
+    name: 'a negative quantity is rejected',
+    run: () => {
+      const r = runPostRails(
+        out({
+          reply: 'Adding the Vintner Cabernet Sauvignon.',
+          actions: [{ type: 'add_to_cart', ref: 1, qty: -5 }],
+        }),
+        ctx(),
+      );
+      return { pass: fired(r.events, 'QTY_INVALID') && r.actions.length === 0, got: codes(r.events) };
+    },
+  },
+);

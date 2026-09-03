@@ -3,6 +3,7 @@ import { preflight, ingestDomain } from '../../ingest/index.js';
 import { normaliseDomain } from '../../ingest/fetch.js';
 import { getBrandByDomain } from '../../store/queries.js';
 import { getDb } from '../../store/db.js';
+import { checkIngestAllowed } from '../../agent/limits.js';
 
 export async function registerIngestRoutes(app: FastifyInstance) {
   app.post<{ Body: { domain: string } }>('/api/preflight', async (req, reply) => {
@@ -22,6 +23,13 @@ export async function registerIngestRoutes(app: FastifyInstance) {
       'X-Accel-Buffering': 'no',
     });
     const send = (data: unknown) => reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+
+    const limit = checkIngestAllowed(String(req.ip));
+    if (!limit.allowed) {
+      send({ type: 'error', message: limit.message });
+      reply.raw.end();
+      return;
+    }
 
     try {
       const result = await ingestDomain(req.body.domain, send, { force: req.body.force });

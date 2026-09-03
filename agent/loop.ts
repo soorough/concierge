@@ -7,6 +7,7 @@ import { runPreRails } from './rails/pre.js';
 import { runPostRails, parseModelOutput, type ModelAction } from './rails/post.js';
 import { getProvider } from './providers/index.js';
 import { addToCart, getCart, type CartView } from './cart.js';
+import { checkTurnAllowed, recordSpend } from './limits.js';
 import type { StoredBrand } from '../store/queries.js';
 import type { RailEvent } from './rails/types.js';
 
@@ -93,6 +94,33 @@ export async function runTurn(opts: {
     };
   }
 
+  // --- tool limits: refused before any model call, and visible as a rail
+  const limit = checkTurnAllowed(customer.id, text);
+  if (!limit.allowed) {
+    const turnId = recordTurn({
+      customerId: customer.id,
+      direction: 'out',
+      text: limit.message,
+      latencyMs: Date.now() - started,
+      costCents: 0,
+    });
+    recordRailEvent(turnId, 'block', limit.code, 'refused before any model call');
+
+    return {
+      turnId,
+      customerId: customer.id,
+      reply: limit.message,
+      cart: null,
+      showCheckout: false,
+      needsAgeCheck: false,
+      rails: [{ level: 'block', code: limit.code, detail: 'refused before any model call' }],
+      latencyMs: Date.now() - started,
+      costCents: 0,
+      model: null,
+      provider: null,
+    };
+  }
+
   // --- retrieval
   const retrieval = retrieve({ brandId: brand.id, customerId: customer.id, message: text });
 
@@ -130,6 +158,8 @@ export async function runTurn(opts: {
    * used as the reply and the rails still run over it, so a recovered turn is held to the
    * same standard as a parsed one.
    */
+  recordSpend(response.costCents);
+
   const parsed = parseModelOutput(response.text);
   const recoveryEvent: RailEvent | null = parsed.recovered
     ? { level: 'warn', code: 'OUTPUT_RECOVERED', detail: parsed.recovered }
@@ -144,6 +174,7 @@ export async function runTurn(opts: {
     restrictedRegions: JSON.parse(brand.restricted_regions_json ?? '[]') as string[],
     customerRegion: customer.region,
     priceOrdered: retrieval.priceOrdered,
+    policyText: retrieval.policies.map((p) => p.text).join('\n'),
   });
 
   if (recoveryEvent) post.events.unshift(recoveryEvent);
