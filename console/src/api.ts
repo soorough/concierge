@@ -46,7 +46,22 @@ const json = async (r: Response) => {
 const post = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(json);
 
+export type Slo = { name: string; value: number; limit: number; ok: boolean; note: string };
+
+export type Metrics = {
+  windowHours: number;
+  turnsIn: number;
+  modelCalls: number;
+  costCents: number;
+  costPerTurnCents: number;
+  latency: { p50: number; p95: number; max: number };
+  rates: { escalation: number; blocked: number; recovered: number; limited: number };
+  rails: { code: string; level: string; count: number; perHundredTurns: number }[];
+  slos: Slo[];
+};
+
 export const api = {
+  metrics: (hours = 24): Promise<Metrics> => fetch(`/api/metrics?hours=${hours}`).then(json),
   brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
     fetch('/api/brands').then(json),
   brand: (domain: string): Promise<Brand> => fetch(`/api/brand/${domain}`).then(json),

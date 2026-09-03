@@ -4,6 +4,7 @@ import { normaliseDomain } from '../../ingest/fetch.js';
 import { getBrandByDomain } from '../../store/queries.js';
 import { getDb } from '../../store/db.js';
 import { checkIngestAllowed } from '../../agent/limits.js';
+import { getMetrics, checkSlos } from '../../store/metrics.js';
 
 export async function registerIngestRoutes(app: FastifyInstance) {
   app.post<{ Body: { domain: string } }>('/api/preflight', async (req, reply) => {
@@ -58,6 +59,13 @@ export async function registerIngestRoutes(app: FastifyInstance) {
       missing: JSON.parse(brand.missing_json ?? '[]'),
       counts,
     };
+  });
+
+  /** Live health, for the console and for anything watching from outside. */
+  app.get<{ Querystring: { hours?: string } }>('/api/metrics', async (req) => {
+    const hours = Math.min(720, Math.max(1, Number(req.query?.hours ?? 24)));
+    const metrics = getMetrics(hours);
+    return { ...metrics, slos: checkSlos(metrics) };
   });
 
   app.get('/api/brands', async () =>

@@ -12,8 +12,10 @@ catalog, their real prices, and their real policies, and can hand you a real car
 Working end to end against a live Shopify catalog: ingest, agent turns, deterministic
 rails, an append-only fact ledger, and a real cart handoff.
 
-- `npm run evals` — 51 deterministic cases, no API key required
+- `npm run evals` — 59 deterministic cases, no API key required
 - `npm run stress` — 29 adversarial probes against a running agent
+- `npm run monitor` — live health against written-down service levels; exits non-zero on a breach
+- `npm run restart` — rebuild the console and restart the server, killing by port
 
 ## Run
 

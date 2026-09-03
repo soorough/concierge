@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api, clock, type Brand, type Fact, type ThreadTurn } from './api';
+import { useEffect, useState } from 'react';
+import { api, clock, type Brand, type Fact, type Metrics, type ThreadTurn } from './api';
 
 /**
  * The operator's side: what the machine did, and why it is allowed to have said it.
@@ -16,8 +16,21 @@ export function Record({
   onFacts: () => void;
 }) {
   const [note, setNote] = useState('');
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
+
+  // Health is about the deployment, not this thread, so it refreshes on its own.
+  useEffect(() => {
+    let live = true;
+    const load = () => api.metrics(24).then((m) => live && setMetrics(m)).catch(() => undefined);
+    load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [turns.length]);
 
   const events = turns.flatMap((t) => t.rails.map((r) => ({ ...r, at: t.created_at })));
   const superseded = facts.all.filter((f) => f.valid_to !== null);
@@ -70,6 +83,27 @@ export function Record({
           ))}
           {superseded.map((f) => (
             <FactRow key={f.id} fact={f} dead />
+          ))}
+        </>
+      )}
+
+      {metrics && metrics.turnsIn > 0 && (
+        <>
+          <p className="eyebrow">
+            <span>Health · last {metrics.windowHours}h</span>
+            <span>{metrics.turnsIn} turns</span>
+          </p>
+          {metrics.slos.map((s) => (
+            <div className={`row ${s.ok ? 'lvl-pass' : 'lvl-block'}`} key={s.name}>
+              <time>{s.ok ? 'ok' : 'breach'}</time>
+              <span>
+                <span className="code">{s.name}</span>
+                <span className="detail">
+                  {' '}
+                  {s.value} <span style={{ opacity: 0.6 }}>/ {s.limit}</span>
+                </span>
+              </span>
+            </div>
           ))}
         </>
       )}

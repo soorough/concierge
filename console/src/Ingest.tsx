@@ -1,13 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ingestStream, type Brand } from './api';
 
 type LogLine = { k: string; v: string; cls?: string };
 
 export function Ingest({ brand, onIngested }: { brand: Brand | null; onIngested: (domain: string) => void }) {
-  const [domain, setDomain] = useState('onehopewine.com');
+  const [domain, setDomain] = useState(brand?.domain ?? 'onehopewine.com');
   const [verdict, setVerdict] = useState<{ path: string; detail: string; ms: number } | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // Follow the selected brand, so the field never contradicts the thread beside it.
+  useEffect(() => {
+    if (brand?.domain) setDomain(brand.domain);
+  }, [brand?.domain]);
 
   const run = async (force: boolean) => {
     setBusy(true);

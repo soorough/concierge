@@ -13,7 +13,8 @@
     "evals": "tsx evals/run.ts",
     "stress": "tsx evals/adversarial.ts",
     "db:reset": "rm -f data/concierge.db && tsx store/migrate.ts",
-    "restart": "scripts/restart.sh"
+    "restart": "scripts/restart.sh",
+    "monitor": "tsx evals/monitor.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

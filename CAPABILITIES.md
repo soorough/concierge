@@ -46,6 +46,19 @@ with
 | Second source | A rep's field note extracted into the same ledger, outranked by anything the customer says |
 | Compliance keywords | STOP, START, HELP handled with fixed strings and no model call |
 
+### Monitoring
+
+| Capability | Notes |
+|---|---|
+| Live telemetry | `/api/metrics` aggregates turns, model calls, cost, latency percentiles and rail rates over any window up to 30 days |
+| Service levels | Five written-down thresholds — escalation rate, blocked rate, recovered-output rate, p95 latency, cost per turn |
+| Console health panel | The same figures beside the rail log, refreshed every 30s |
+| Scheduled check | `npm run monitor` prints the dashboard and exits non-zero on a breach, so it can run on a cron rather than be remembered |
+| Per-brand cost | Spend attributed to the brand that incurred it |
+
+Rail rates are a *safety* signal, not an accuracy one. A turn where no rail fired is a turn
+nobody objected to, which is not the same as a turn that was right.
+
 ### Guardrails
 
 Every rail below is deterministic and fires whatever the model produced.
@@ -98,6 +111,14 @@ non-existent products, and absurd or negative cart quantities.
 
 ### Not built yet
 
+**Accuracy in production is not measured.** The monitor answers "is the system behaving" —
+cost, latency, how often rails fire, whether the model is returning usable output. It does
+not answer "were the answers correct". That needs one of: a judge model over sampled turns,
+a golden set replayed on a schedule against the live config, or human review of a sample.
+`npm run stress` is the closest thing and it runs only when invoked.
+
+Other gaps:
+
 | Gap | Consequence |
 |---|---|
 | Crawl adapter | Non-Shopify brands classify as `crawl` and then stop. Only Shopify ingests end to end |
@@ -108,6 +129,8 @@ non-existent products, and absurd or negative cart quantities.
 | Policy pages beyond four | Only shipping, refund, terms and FAQ are fetched; brands with a wider help centre lose the rest |
 | Currency conversion | The brand's own currency is detected, validated and rendered, but never converted for the viewer |
 | Deployment | Runs locally. Railway configuration and a live URL are still outstanding |
+| Alerting | The monitor exits non-zero; nothing routes that anywhere |
+| Metrics retention | Derived from the turn table, so history lives as long as the database does; no rollups |
 
 ### Known weaknesses
 

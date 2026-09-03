@@ -344,6 +344,30 @@ meaningless.
 feedback loop is more dangerous than a missing one, because it produces confident readings
 of code that is not running.
 
+## 25. The rails are the telemetry
+
+Nothing was watching production. There were 59 deterministic tests and 29 adversarial
+probes, both run by hand before shipping, and that is a different thing from knowing
+whether the running system is behaving.
+
+The raw material already existed. Every turn records cost, latency and tokens; every rail
+firing is a row with a code and a level. Aggregating them gives a live safety signal for
+free: a rail firing is a machine-readable statement that the model tried something it
+should not have, so its rate over real traffic is the closest thing to a production health
+metric this design can produce.
+
+Five service levels are written down rather than left to judgement, and escalation carries
+a ceiling for a reason worth stating: an agent that refuses a quarter of its turns is not
+safe, it is useless.
+
+Over 417 real turns: 14.6% escalated, 9.1% blocked, 1.9% recovered, p95 1.8s, 0.301¢ per
+turn — all inside limits.
+
+**What this does not measure is accuracy.** A turn where no rail fired is a turn nobody
+objected to, which is not the same as a turn that was right. Closing that needs a judge
+model over sampled turns, a golden set replayed against the live config, or human review.
+Naming the gap is worth more than a number that implies it is covered.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a
