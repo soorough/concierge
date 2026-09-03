@@ -1,31 +1,40 @@
 import type { RetrievedProduct } from '../retrieve.js';
 import type { RailEvent } from './types.js';
 
+export type ModelAction = {
+  type: string;
+  /** 1-based position in the catalog shown to the model. */
+  ref?: number;
+  /** Tolerated fallback when a model reverts to SKUs. */
+  sku?: string;
+  qty?: number;
+};
+
 export type ModelOutput = {
   reply: string;
-  actions: { type: string; sku?: string; qty?: number }[];
+  actions: ModelAction[];
   learned: { predicate: string; object: string; confidence?: number }[];
   needs_age_check?: boolean;
   escalate?: string | null;
 };
 
 export type PostRailContext = {
+  /** Exactly what the model was shown, in the order it was shown. */
   catalog: RetrievedProduct[];
-  allSellableSkus: Set<string>;
   nonSellableSkus: Set<string>;
   category: string;
   ageVerified: boolean;
   restrictedRegions: string[];
   customerRegion: string | null;
-  /** When the catalog slice is the price-ordered head, a price ranking is verifiable. */
+  /** When true, a price ranking is verifiable from what the model was given. */
   priceOrdered?: boolean;
 };
 
 export type PostRailResult = {
   reply: string;
-  actions: ModelOutput['actions'];
+  actions: ModelAction[];
   events: RailEvent[];
-  /** True when the reply must not be sent as-is and a human is needed. */
+  /** The reply must not be sent as written and a human is needed. */
   escalated: boolean;
   blockCheckout: boolean;
   needsAgeCheck: boolean;
@@ -34,28 +43,34 @@ export type PostRailResult = {
 const ESCALATION_REPLY =
   "I don't want to guess on that one — let me get someone from the team to confirm.";
 
-/** Digits, and the spelled-out forms the numeric rail cannot see. */
+const NUMERIC_PRICE = /\$\s?\d[\d,]*(?:\.\d{2})?/;
+
+/** The spelled-out forms the numeric rail cannot see. */
 const SPELLED_PRICE =
   /\b(?:around|about|roughly|approximately|circa|just under|just over|nearly)?\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)[\w\s-]{0,12}\s*(?:dollars|bucks|usd)\b/i;
-const NUMERIC_PRICE = /\$\s?\d[\d,]*(?:\.\d{2})?/;
-/**
- * Retrieval hands the model a slice of the catalog, not the catalog, so any ranking
- * claim is unverifiable from where the model sits. This warns rather than blocks —
- * the claim is often correct, but an operator should be able to see it was made.
- */
-const SUPERLATIVE =
-  /\b(cheapest|most affordable|least expensive|lowest[- ]priced|best[- ]selling|most popular|our best\b|top[- ]rated|only one we)\b/i;
-
-const NEGATED = /\b(don't|do not|can't|cannot|couldn't|won't|not able|no way to|unable|without|which is|whether)\b/i;
 
 const OFFER =
   /(\d{1,2}\s?%\s?off|percent off|coupon|promo\s?code|discount code|voucher|free\s+(?:bottle|item|gift)\b)/i;
 
-/** Words that appear in half a catalog and so identify nothing. */
+/** Language that tells the customer something was put in their cart. */
+const ANNOUNCES_ADD =
+  /\b(add(ed|ing)?|grabb?(ed|ing)|put|popp(ed|ing)|in your cart|to your cart|to the cart|your cart now)\b/i;
+
+/** Catalog numbers are internal addressing and must never reach the customer. */
+const CATALOG_REF = /\s*\[\d{1,3}\]/g;
+
+const SUPERLATIVE =
+  /\b(cheapest|most affordable|least expensive|lowest[- ]priced|best[- ]selling|most popular|our best\b|top[- ]rated|only one we)\b/i;
+
+/** A sentence that declines to rank is the behaviour the superlative rail wants. */
+const NEGATED =
+  /\b(don't|do not|can't|cannot|couldn't|won't|not able|no way to|unable|without|which is|whether)\b/i;
+
+/** Words appearing across half a catalog, which therefore identify nothing. */
 const TITLE_NOISE = new Set([
-  'wine','wines','bottle','bottles','the','and','with','for','our','red','white','rose',
-  'pack','set','gift','box','case','trio','duo','collection','bundle','edition','reserve',
-  'nv','ml','oz','x2','x4','x6',
+  'wine', 'wines', 'bottle', 'bottles', 'the', 'and', 'with', 'for', 'our', 'red', 'white',
+  'rose', 'pack', 'set', 'gift', 'box', 'case', 'trio', 'duo', 'collection', 'bundle',
+  'edition', 'reserve', 'nv', 'ml', 'oz',
 ]);
 
 function distinctiveTokens(title: string): string[] {
@@ -77,31 +92,50 @@ function distinctiveTokens(title: string): string[] {
 function namedIn(reply: string, title: string): boolean {
   const tokens = distinctiveTokens(title);
   if (!tokens.length) return false;
-  const hay = reply.toLowerCase();
-  const hits = tokens.filter((t) => hay.includes(t)).length;
-  return hits / tokens.length >= 0.6;
+  const haystack = reply.toLowerCase();
+  return tokens.filter((t) => haystack.includes(t)).length / tokens.length >= 0.6;
 }
 
-export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailResult {
+/** Products are addressable by catalog number, SKU, or id — whichever the model used. */
+function buildIndex(catalog: RetrievedProduct[]): Map<string, RetrievedProduct> {
+  const index = new Map<string, RetrievedProduct>();
+  catalog.forEach((p, i) => {
+    index.set(String(i + 1), p);
+    if (p.sku) index.set(p.sku.toLowerCase(), p);
+    index.set(p.id.toLowerCase(), p);
+  });
+  return index;
+}
+
+const actionKey = (a: ModelAction): string =>
+  a.ref !== undefined ? String(a.ref) : (a.sku ?? '').toLowerCase();
+
+/**
+ * Deterministic checks between the model and the customer. Ordered so that grounding runs
+ * before policy, and policy before anything that can emit a card.
+ */
+export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRailResult {
   const events: RailEvent[] = [];
-  let reply = out.reply ?? '';
-  let actions = out.actions ?? [];
+  const index = buildIndex(ctx.catalog);
+
+  let reply = output.reply ?? '';
+  let actions = output.actions ?? [];
   let escalated = false;
   let blockCheckout = false;
 
   // 1. Price resolution — the model emits a token, the database supplies the number.
-  const priceBySku = new Map(ctx.catalog.map((p) => [(p.sku || p.id).toLowerCase(), p]));
   let resolved = 0;
   const unknownTokens: string[] = [];
-  reply = reply.replace(/\{\{price:([^}]+)\}\}/g, (_m, rawSku: string) => {
-    const p = priceBySku.get(rawSku.trim().toLowerCase());
-    if (!p) {
-      unknownTokens.push(rawSku.trim());
+  reply = reply.replace(/\{\{price:([^}]+)\}\}/g, (_match, rawRef: string) => {
+    const product = index.get(rawRef.trim().toLowerCase());
+    if (!product) {
+      unknownTokens.push(rawRef.trim());
       return '';
     }
     resolved++;
-    return `$${(p.price_cents / 100).toFixed(2)}`;
+    return `$${(product.price_cents / 100).toFixed(2)}`;
   });
+
   if (resolved) {
     events.push({ level: 'pass', code: 'PRICE_RESOLVED', detail: `${resolved} token(s) from DB` });
   }
@@ -110,7 +144,7 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     events.push({
       level: 'block',
       code: 'UNGROUNDED_PRICE',
-      detail: `price token for unknown SKU: ${unknownTokens.join(', ')}`,
+      detail: `price token for unknown product: ${unknownTokens.join(', ')}`,
     });
   }
 
@@ -128,7 +162,32 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     });
   }
 
-  // 3. Offers. Only what is on-site is authorised.
+  // 3. Catalog numbers are ours, not the customer's.
+  const leaked = reply.match(CATALOG_REF);
+  if (leaked) {
+    reply = reply.replace(CATALOG_REF, '');
+    events.push({
+      level: 'warn',
+      code: 'REF_LEAKED',
+      detail: `stripped ${leaked.length} catalog reference(s)`,
+    });
+  }
+
+  // 4. Ranking claims are visible even when true — the model is shown a slice by default.
+  if (!ctx.priceOrdered) {
+    const claim = reply
+      .split(/(?<=[.!?])\s+/)
+      .find((sentence) => SUPERLATIVE.test(sentence) && !NEGATED.test(sentence));
+    if (claim) {
+      events.push({
+        level: 'warn',
+        code: 'UNVERIFIED_SUPERLATIVE',
+        detail: `ranking claim over a slice: "${claim.match(SUPERLATIVE)?.[0]}"`,
+      });
+    }
+  }
+
+  // 5. Offers. Only what is on-site is authorised.
   const offer = reply.match(OFFER);
   if (offer) {
     events.push({ level: 'block', code: 'UNAUTHORIZED_OFFER', detail: `matched "${offer[0]}"` });
@@ -137,74 +196,83 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     actions = actions.filter((a) => a.type !== 'show_checkout');
   }
 
-  // Heuristic: a sentence that declines to rank ("I can't say which is cheapest") is
-  // the behaviour this rail wants, so flagging it would train the operator to ignore it.
-  const superlativeSentence = ctx.priceOrdered ? undefined : reply
-    .split(/(?<=[.!?])\s+/)
-    .find((sentence) => SUPERLATIVE.test(sentence) && !NEGATED.test(sentence));
-  const superlative = superlativeSentence?.match(SUPERLATIVE);
-  if (superlative) {
-    events.push({
-      level: 'warn',
-      code: 'UNVERIFIED_SUPERLATIVE',
-      detail: `ranking claim over a retrieved slice: "${superlative[0]}"`,
-    });
-  }
+  // 6. Every product acted on must be one the model was actually shown.
+  for (const action of actions) {
+    const key = actionKey(action);
+    if (!key) continue;
+    const product = index.get(key);
 
-  // 4. Products the model named must exist and be sellable.
-  for (const a of actions) {
-    if (!a.sku) continue;
-    const key = a.sku.toLowerCase();
-    if (ctx.nonSellableSkus.has(key)) {
+    if (!product) {
       escalated = true;
-      events.push({ level: 'block', code: 'NON_SELLABLE_SKU', detail: `${a.sku} is not a sellable product` });
-    } else if (!ctx.allSellableSkus.has(key)) {
+      events.push({ level: 'block', code: 'CART_REJECTED', detail: `not in the shown catalog: ${key}` });
+    } else if (ctx.nonSellableSkus.has((product.sku ?? product.id).toLowerCase())) {
       escalated = true;
-      events.push({ level: 'block', code: 'CART_REJECTED', detail: `unknown SKU: ${a.sku}` });
-    } else if (a.type === 'add_to_cart') {
-      events.push({ level: 'pass', code: 'CART_WRITE', detail: `${a.sku} x${a.qty ?? 1}` });
+      events.push({ level: 'block', code: 'NON_SELLABLE_SKU', detail: `${product.title} is not sellable` });
+    } else if (action.type === 'add_to_cart') {
+      events.push({ level: 'pass', code: 'CART_WRITE', detail: `${product.title} x${action.qty ?? 1}` });
     }
   }
-  if (escalated) actions = actions.filter((a) => !a.sku);
+  if (escalated) actions = actions.filter((a) => !actionKey(a));
 
   /*
-   * 4b. The reply and the action must agree.
+   * 7a. A cart write the reply never mentions is a cart write the customer did not ask for.
    *
-   * Every other rail passed while the agent said "adding the Sparkling Moscato" and wrote
-   * a $59 Pink Shimmer to the cart: the SKU was real, sellable, and in the catalog. A
-   * checkout card that contradicts the sentence above it is worse than a refusal, because
-   * the customer has no reason to doubt it.
+   * Live, "what goes with a ribeye steak?" — a question — added a $29 bottle. The agent
+   * recommended in prose and added in actions, so the card appeared with an item the
+   * customer had not agreed to. Recommending is not adding.
    */
-  const namedProducts = ctx.catalog.filter((p) => namedIn(reply, p.title));
-  if (namedProducts.length) {
-    const namedKeys = new Set(namedProducts.map((p) => (p.sku || p.id).toLowerCase()));
-    const contradicting = actions.filter(
-      (a) => a.type === 'add_to_cart' && a.sku && !namedKeys.has(a.sku.toLowerCase()),
-    );
+  const unannounced = actions.filter((a) => a.type === 'add_to_cart' && !ANNOUNCES_ADD.test(reply));
+  if (unannounced.length) {
+    const first = index.get(actionKey(unannounced[0]));
+    events.push({
+      level: 'warn',
+      code: 'CART_UNANNOUNCED',
+      detail: `dropped an unrequested add: "${first?.title ?? actionKey(unannounced[0])}"`,
+    });
+    actions = actions.filter((a) => !unannounced.includes(a));
+  }
+
+  /*
+   * 7b. The reply and the action must agree.
+   *
+   * Every other rail passed while the agent said "adding the Sparkling Moscato" and wrote a
+   * $59 Pink Shimmer: the product was real, sellable and in the catalog. A checkout card
+   * contradicting the sentence above it is worse than a refusal, because the customer has
+   * no reason to doubt it.
+   */
+  const named = ctx.catalog.filter((p) => namedIn(reply, p.title));
+  if (named.length) {
+    const namedIds = new Set(named.map((p) => p.id));
+    const contradicting = actions.filter((a) => {
+      if (a.type !== 'add_to_cart') return false;
+      const product = index.get(actionKey(a));
+      return product ? !namedIds.has(product.id) : false;
+    });
+
     if (contradicting.length) {
       escalated = true;
-      const added = ctx.catalog.find(
-        (p) => (p.sku || p.id).toLowerCase() === contradicting[0].sku!.toLowerCase(),
-      );
+      const added = index.get(actionKey(contradicting[0]));
       events.push({
         level: 'block',
         code: 'CART_MISMATCH',
-        detail: `reply names "${namedProducts[0].title}" but the action adds "${added?.title ?? contradicting[0].sku}"`,
+        detail: `reply names "${named[0].title}" but the action adds "${added?.title ?? actionKey(contradicting[0])}"`,
       });
       actions = actions.filter((a) => !contradicting.includes(a));
     }
   }
 
-  // 5. Age. On an alcohol brand the checkout card is withheld until confirmation.
+  // 8. Age. On an alcohol brand the checkout card is withheld until confirmation.
   const needsAgeCheck =
-    ctx.category === 'alcohol' && !ctx.ageVerified &&
-    (Boolean(out.needs_age_check) || actions.some((a) => a.type === 'show_checkout' || a.type === 'add_to_cart'));
+    ctx.category === 'alcohol' &&
+    !ctx.ageVerified &&
+    (Boolean(output.needs_age_check) ||
+      actions.some((a) => a.type === 'show_checkout' || a.type === 'add_to_cart'));
   if (needsAgeCheck) {
     blockCheckout = true;
     events.push({ level: 'block', code: 'AGE_REQUIRED', detail: 'alcohol brand, age not confirmed' });
   }
 
-  // 6. Region.
+  // 9. Region.
   if (
     ctx.customerRegion &&
     ctx.restrictedRegions.some((r) => r.toLowerCase() === ctx.customerRegion!.toLowerCase())
@@ -213,17 +281,17 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     events.push({ level: 'block', code: 'REGION_BLOCKED', detail: `cannot ship to ${ctx.customerRegion}` });
   }
 
-  // 7. Escalation, either the model's own or a rail's.
-  if (out.escalate) {
+  // 10. Escalation, the model's own or a rail's.
+  if (output.escalate) {
     escalated = true;
-    events.push({ level: 'warn', code: 'ESCALATED', detail: out.escalate });
+    events.push({ level: 'warn', code: 'ESCALATED', detail: output.escalate });
   }
   if (escalated) {
     reply = ESCALATION_REPLY;
     actions = actions.filter((a) => a.type !== 'show_checkout');
   }
 
-  // 8. Length.
+  // 11. Length.
   if (reply.length > 1000) {
     const cut = reply.slice(0, 1000);
     const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
@@ -231,20 +299,84 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     events.push({ level: 'warn', code: 'LENGTH', detail: 'truncated at sentence boundary' });
   }
 
-  return { reply: reply.replace(/\s{2,}/g, ' ').trim(), actions, events, escalated, blockCheckout, needsAgeCheck };
+  return {
+    reply: reply.replace(/\s{2,}/g, ' ').trim(),
+    actions,
+    events,
+    escalated,
+    blockCheckout,
+    needsAgeCheck,
+  };
 }
 
-/** Models wrap JSON in prose or fences often enough that this must be tolerant. */
-export function parseModelOutput(text: string): ModelOutput {
-  let raw = text.trim();
+export type ParsedOutput = ModelOutput & {
+  /** Set when the output was not valid JSON and the text was used as a plain reply. */
+  recovered?: string;
+};
+
+/**
+ * Models wrap JSON in prose or fences, and occasionally skip it entirely — one live turn
+ * began with a bare `{{price:4}}` token, so scanning for the first `{` landed inside the
+ * token rather than the object.
+ *
+ * Every plausible object is tried in turn, and if none parse the text is used as a plain
+ * reply rather than losing the turn. The rails still run over it, so a recovered reply is
+ * held to the same standard as a parsed one — a degraded answer beats an error message.
+ */
+export function parseModelOutput(text: string): ParsedOutput {
+  const raw = text.trim();
+  if (!raw) throw new Error('empty model output');
+
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) raw = fence[1].trim();
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error(`no JSON object in model output: ${text.slice(0, 160)}`);
-  const parsed = JSON.parse(raw.slice(start, end + 1)) as Partial<ModelOutput>;
+  const candidates = [fence?.[1]?.trim(), ...objectCandidates(raw)].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    const parsed = tryParse(candidate);
+    if (parsed) return parsed;
+  }
+
   return {
-    reply: typeof parsed.reply === 'string' ? parsed.reply : '',
+    reply: stripFences(raw),
+    actions: [],
+    learned: [],
+    needs_age_check: false,
+    escalate: null,
+    recovered: 'model did not return JSON; used its text as the reply',
+  };
+}
+
+function stripFences(text: string): string {
+  return text.replace(/```(?:json)?/g, '').trim();
+}
+
+/** Balanced-brace spans starting at each `{`, longest first. */
+function objectCandidates(raw: string): string[] {
+  const spans: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== '{') continue;
+    let depth = 0;
+    for (let j = i; j < raw.length; j++) {
+      if (raw[j] === '{') depth++;
+      else if (raw[j] === '}' && --depth === 0) {
+        spans.push(raw.slice(i, j + 1));
+        break;
+      }
+    }
+  }
+  return spans.sort((a, b) => b.length - a.length);
+}
+
+function tryParse(candidate: string): ParsedOutput | null {
+  let parsed: Partial<ModelOutput>;
+  try {
+    parsed = JSON.parse(candidate) as Partial<ModelOutput>;
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || typeof parsed.reply !== 'string') return null;
+
+  return {
+    reply: parsed.reply,
     actions: Array.isArray(parsed.actions) ? parsed.actions : [],
     learned: Array.isArray(parsed.learned) ? parsed.learned : [],
     needs_age_check: Boolean(parsed.needs_age_check),

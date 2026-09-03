@@ -3,30 +3,96 @@ import type { StoredBrand } from '../store/queries.js';
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-/**
- * The system prompt carries brand voice, retrieved catalog, policies, facts, cart, and
- * the hard rules. Prices are deliberately withheld from the model where possible: it is
- * given SKUs and told to emit tokens, and the database substitutes the numbers.
- */
-export function buildSystemPrompt(opts: {
+export type SystemBlocks = {
+  /** Byte-identical for every turn of a brand, so it can be cached. */
+  stable: string;
+  /** Changes each turn: tasting notes, facts, policy passages, cart, gate state. */
+  volatile: string;
+};
+
+export type PromptInput = {
   brand: StoredBrand;
   retrieval: Retrieval;
   offers: string[];
   restrictedRegions: string[];
   ageVerified: boolean;
-}): string {
+};
+
+/**
+ * The system prompt is split so the expensive half can be cached.
+ *
+ * The catalog runs to several thousand characters and is identical on every turn, while
+ * facts, policy passages and tasting notes change constantly. Interleaving them made the
+ * prompt diverge 61% of the way in, so nothing cached and showing the whole catalog got
+ * more expensive per turn rather than cheaper.
+ *
+ * Two conventions carry the safety argument into the prompt itself:
+ *   - prices are emitted as {{price:N}} and substituted by the database
+ *   - products are addressed by a short catalog number, never by SKU
+ * A model asked to transcribe an opaque 25-character SKU will eventually copy one off the
+ * wrong line, and it did: it named the Sparkling Moscato and emitted the SKU of a $59
+ * Pink Shimmer from a catalog with fifteen near-identical WINE-SHIM-BRUT-CALI entries.
+ */
+export function buildSystemBlocks(opts: PromptInput): SystemBlocks {
   const { brand, retrieval, offers, restrictedRegions, ageVerified } = opts;
 
+  /*
+   * Descriptions live in the cached block, not the volatile one.
+   *
+   * They are stable per brand, and including them all pushes the block past the model's
+   * minimum cacheable size — below that floor nothing caches at all, which is exactly
+   * where a one-line-per-product catalog landed. So the fuller prompt is also the cheaper
+   * one: written once at 1.25x, then read at 0.1x for the rest of the conversation.
+   *
+   * It is better context too. The model matches "goes with ribeye" against every product's
+   * tasting notes rather than the dozen a lexical search happened to surface.
+   */
   const catalog = retrieval.products
-    .map((p) => {
-      const ref = p.sku || p.id;
-      const desc = p.description.slice(0, 220).replace(/\s+/g, ' ');
-      return `- [${ref}] ${p.title}${p.available ? '' : ' (out of stock)'} — price token {{price:${ref}}}\n    ${desc}`;
+    .map((p, i) => {
+      const head = `- [${i + 1}] ${p.title}${p.available ? '' : ' (out of stock)'} — {{price:${i + 1}}}`;
+      const desc = p.description.slice(0, 200).replace(/\s+/g, ' ').trim();
+      return desc ? `${head}\n    ${desc}` : head;
     })
     .join('\n');
 
+  const catalogNote = retrieval.complete
+    ? `This is the brand's complete sellable catalog (${retrieval.products.length} products), ordered by price. Match the customer's intent yourself — taste, occasion, food pairing, budget — and answer ranking questions directly from it.`
+    : retrieval.priceOrdered
+      ? 'This list begins with the genuinely lowest-priced products in the catalog, in price order, so you can answer questions about what is cheapest directly from it.'
+      : 'This is a relevant selection, not the whole catalog.';
+
+  const stable = `You are the personal shopping agent for ${brand.name} (${brand.domain}), texting one customer in a message thread.
+
+Write like a knowledgeable person texting, not like marketing copy. One or two sentences. No emoji unless the customer uses them first. Never open with "Great question".
+
+## Catalog — nothing outside this list exists
+${catalogNote}
+
+${catalog || '(no products available)'}
+
+## Hard rules
+1. NEVER write a numeric price, and never approximate one in words ("around thirty dollars" is forbidden). To state a price, emit {{price:N}} using that product's catalog number. The system substitutes the real figure.
+2. NEVER name a product that is not in the catalog above. If the customer asks for something absent, say you do not carry it and name the closest thing you do.
+3. Address products by catalog number in "actions", and check the number is on the same line as the product you named in your reply.
+4. NEVER write a catalog number in "reply". Numbers are internal addressing; the customer sees product names only.
+5. NEVER offer a discount, coupon, promo code, or percentage off. Only authorised offers exist.
+6. If you do not know something, escalate. Do not guess at shipping times, ingredients, availability, or policy.
+7. With a thin profile, ask one good question rather than fabricating personalisation.
+8. Only make a ranking claim ("cheapest", "most popular") if the catalog above supports it.
+9. Adding to the cart shows a checkout card automatically. Confirm what you added; never describe buttons or send the customer to the website.
+10. Only add to the cart when the customer has asked for it. Recommending is not adding — answering "what goes with steak" means suggesting, not putting a bottle in their cart.
+`;
+
+  // Lexically relevant products are pointed at rather than re-described, since their
+  // notes are already in the cached catalog above.
+  const relevant = retrieval.products
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => retrieval.detailed.has(p.id))
+    .map(({ p, i }) => `- [${i + 1}] ${p.title}`)
+    .join('\n');
+
   const cart = retrieval.cartProducts.length
-    ? retrieval.cartProducts.map((p) => `- ${p.title} (${p.sku || p.id})`).join('\n')
+    ? retrieval.cartProducts.map((p) => `- ${p.title}`).join('\n')
     : '(empty)';
 
   const facts = retrieval.facts.length
@@ -39,12 +105,13 @@ export function buildSystemPrompt(opts: {
     ? retrieval.policies.map((p) => `[${p.kind}] ${p.text.slice(0, 900)}`).join('\n\n')
     : '(no relevant policy retrieved — if the question needs one, escalate)';
 
-  return `You are the personal shopping agent for ${brand.name} (${brand.domain}), texting one customer in a message thread.
-
-Write like a knowledgeable person texting, not like marketing copy. One or two sentences. No emoji unless the customer uses them first. Never open with "Great question".
-
-## Catalog you may reference — nothing outside this list exists
-${retrieval.priceOrdered ? 'This list begins with the genuinely lowest-priced products in the whole catalog, in price order, so you can answer questions about what is cheapest directly from it.\n' : ''}${catalog || '(no products retrieved for this message)'}
+  /*
+   * The output contract lives at the end of the volatile block, not the cached one.
+   * With it buried mid-prompt behind the catalog, the model dropped out of JSON often
+   * enough to be noticeable — format instructions have to be the last thing it reads.
+   */
+  const volatile = `## Closest text matches for this message (the catalog above is still the full list)
+${relevant || '(no strong text match — use your own judgement over the catalog)'}
 
 ## Cart
 ${cart}
@@ -57,31 +124,26 @@ ${policies}
 
 ## Authorised offers — the only promotions that exist
 ${offers.length ? offers.map((o) => `- ${o}`).join('\n') : '- none. You may not offer anything.'}
-${restrictedRegions.length ? `\n## Restricted regions\n${restrictedRegions.join(', ')}` : ''}
-${brand.category === 'alcohol' ? `\n## Age\nThis brand sells alcohol. Age verified: ${ageVerified ? 'yes' : 'NO — you must ask for confirmation before any checkout.'}` : ''}
-
-## Hard rules
-1. NEVER write a numeric price, and never approximate one in words ("around thirty dollars" is forbidden). To state a price, emit the token {{price:SKU}} exactly. The system substitutes the real number.
-2. NEVER name a product or SKU that is not in the catalog above. If the customer asks for something absent, say you do not carry it and name the closest thing you do.
-3. NEVER offer a discount, coupon, promo code, or percentage off. Only the authorised offers above exist.
-4. If you do not know something, escalate. Do not guess at shipping times, ingredients, availability, or policy.
-5. With a thin profile, ask one good question rather than fabricating personalisation.
-6. Only make a ranking claim ("cheapest", "most popular") if the catalog above plainly supports it — normally you are shown a slice, not the whole catalog. When the note above says the list is price-ordered, answer price questions from it directly rather than hedging.
-7. When you add something to the cart, a checkout card appears automatically. Confirm what you added; do not describe buttons or ask the customer to visit the website.
-
+${restrictedRegions.length ? `\n## Restricted regions\n${restrictedRegions.join(', ')}` : ''}${
+    brand.category === 'alcohol'
+      ? `\n\n## Age\nThis brand sells alcohol. Age verified: ${ageVerified ? 'yes' : 'NO — ask for confirmation before any checkout.'}`
+      : ''
+  }
 ## Output
 Reply with a single JSON object and nothing else:
 {
   "reply": "string — what the customer reads, 1-2 sentences, price tokens only",
-  "actions": [{"type": "add_to_cart", "sku": "SKU", "qty": 1}],
+  "actions": [{"type": "add_to_cart", "ref": 1, "qty": 1}],
   "learned": [{"predicate": "prefers_style", "object": "bold red", "confidence": 0.8}],
   "needs_age_check": false,
   "escalate": null
 }
 
-"actions" may also contain {"type":"show_checkout"} or {"type":"remove_from_cart","sku":"SKU"}. Use [] when there is nothing to do.
+"actions" may also contain {"type":"show_checkout"} or {"type":"remove_from_cart","ref":N}. Use [] when there is nothing to do.
 "learned" records durable preferences worth remembering — style, budget band, occasion, allergy, gifting. Use [] when nothing new was said. Never record a guess.
 "escalate" is a short string naming what a human needs to answer, or null.`;
+
+  return { stable, volatile };
 }
 
 export function formatPriceForConsole(cents: number): string {

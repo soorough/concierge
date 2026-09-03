@@ -152,6 +152,54 @@ than hedging.
 slice, and stands down when the slice really is price-ordered. It is a visibility rail:
 the claim is usually true, and an operator should still be able to see it was made.
 
+## 14. The model never handles an identifier it can get wrong
+
+Live, the agent named the Sparkling Moscato in prose and emitted the SKU of a $59 Pink
+Shimmer — copied off a nearby line of a catalog containing fifteen near-identical
+`WINE-SHIM-BRUT-CALI-YY-NN` entries. Every rail passed: the SKU was real and sellable.
+
+Asking a model to transcribe an opaque 25-character identifier is a transcription task,
+and it fails at it. Products are addressed by a short catalog number instead, resolved
+server-side — the same argument as price tokens, applied to identity rather than value.
+
+`CART_MISMATCH` remains as the backstop, and `CART_UNANNOUNCED` covers the neighbouring
+failure: a question ("what goes with a ribeye?") producing a cart write the reply never
+mentions. Recommending is not adding.
+
+## 15. Show the whole catalog; let the model do the ranking
+
+FTS ranks lexically, so "something that goes with steak" is where it is weakest — none of
+those words appear in any title. The answer was not embeddings. A hundred products with
+tasting notes is ~6,800 tokens, so the model can be handed the entire catalog and match
+intent itself, weighing the cart and the fact ledger at the same time — context no
+retrieval scorer has.
+
+Ranking is the right tool for deciding what gets *detail*, and the wrong tool for deciding
+what *exists*. Above `FULL_CATALOG_LIMIT` the lexical slice returns, and that is the point
+at which hybrid retrieval and a reranker earn their place.
+
+## 16. The prompt is split so the expensive half caches
+
+The catalog is identical across a brand's turns; facts, policy passages and cart state are
+not. Interleaving them made the prompt diverge 61% in, so nothing cached and showing the
+full catalog cost *more* per turn.
+
+Split into a cached block and a volatile one, a conversation went from 0.50c/turn to
+0.25c/turn while carrying five times the context: written once at 1.25x, read at 0.1x
+thereafter. Descriptions belong in the cached block for the same reason — without them it
+fell under the model's minimum cacheable size and nothing cached at all.
+
+Two related findings, both from measurement rather than reasoning:
+
+- The output contract has to be the *last* thing the model reads. Buried behind the
+  catalog, the model dropped out of JSON on 3 of 12 turns.
+- Prefilling the assistant turn with `{` took that to 0 of 12. Refusals in particular
+  abandon a requested format and answer in prose; a prefill makes that structurally
+  impossible rather than discouraged.
+
+Non-JSON output no longer loses the turn either — the text becomes the reply and the rails
+still run over it, so a recovered turn is held to the same standard as a parsed one.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

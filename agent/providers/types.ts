@@ -1,10 +1,19 @@
 export type ModelMessage = { role: 'user' | 'assistant'; content: string };
 
+export type SystemBlock = { text: string; cache?: boolean };
+
 export type ModelRequest = {
-  system: string;
+  /** Ordered blocks; a block marked `cache` asks the provider to cache that prefix. */
+  system: string | SystemBlock[];
   messages: ModelMessage[];
   maxTokens?: number;
   temperature?: number;
+  /**
+   * Text to put in the assistant's mouth before it starts generating. Passing "{" makes a
+   * JSON reply structurally the only option — refusals in particular tend to drop out of
+   * a requested format and answer in prose instead.
+   */
+  prefill?: string;
 };
 
 export type ModelResponse = {

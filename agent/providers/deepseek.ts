@@ -28,7 +28,14 @@ export class DeepSeekProvider implements Provider {
         max_tokens: req.maxTokens ?? 700,
         temperature: req.temperature ?? 0.3,
         response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: req.system }, ...req.messages],
+        messages: [
+          {
+            role: 'system',
+            content:
+              typeof req.system === 'string' ? req.system : req.system.map((b) => b.text).join('\n\n'),
+          },
+          ...req.messages,
+        ],
       }),
     });
     if (!res.ok) throw new Error(`deepseek ${res.status}: ${(await res.text()).slice(0, 200)}`);
