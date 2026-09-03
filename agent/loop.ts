@@ -123,6 +123,7 @@ export async function runTurn(opts: {
     ageVerified: Boolean(customer.age_verified_at),
     restrictedRegions,
     customerRegion: customer.region,
+    priceOrdered: retrieval.priceOrdered,
   });
 
   // --- side effects
@@ -151,9 +152,14 @@ export async function runTurn(opts: {
     });
   }
 
-  const showCheckout =
-    post.actions.some((a) => a.type === 'show_checkout') && !post.blockCheckout && !post.escalated;
   const cart = getCart(customer.id, brand.domain, brand.ingest_path);
+
+  /*
+   * The card is a consequence of cart state, not a model decision. Leaving it to the
+   * model produced a real cart with a real item and no way for the customer to see or
+   * act on it — the agent said "adding it to your cart" and the thread just stopped.
+   */
+  const showCheckout = cart.lines.length > 0 && !post.blockCheckout && !post.escalated;
 
   const outTurnId = recordTurn({
     customerId: customer.id, direction: 'out', text: post.reply,

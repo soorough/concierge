@@ -14,11 +14,17 @@ export type RetrievedProduct = {
  * still returns the best partial matches.
  */
 export function toFtsQuery(text: string): string | null {
-  const tokens = text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 2 && !STOPWORDS.has(t))
-    .slice(0, 12);
+  // Deduplicate before capping. Conversation text repeats heavily, and an undeduplicated
+  // cap spent all twelve slots on filler from the newest message — dropping the product
+  // name from the agent's own reply, which is exactly the term that matters.
+  const tokens = Array.from(
+    new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 2 && !STOPWORDS.has(t)),
+    ),
+  ).slice(0, 24);
   if (!tokens.length) return null;
   return tokens.map((t) => `"${t}"*`).join(' OR ');
 }
@@ -31,6 +37,9 @@ const STOPWORDS = new Set([
 
 export type Retrieval = {
   products: RetrievedProduct[];
+  /** True when the slice contains the genuinely cheapest sellable products, so
+   *  "what's your cheapest" is answerable rather than a guess over a text match. */
+  priceOrdered: boolean;
   policies: { kind: string; text: string; source_url: string }[];
   facts: Fact[];
   history: TurnRow[];
@@ -38,6 +47,25 @@ export type Retrieval = {
 };
 
 const SMALL_CATALOG = 60;
+
+const PRICE_INTENT =
+  /\b(cheap(est|er)?|least expensive|most affordable|budget|inexpensive|lowest price|under \$?\d+|below \$?\d+|less than \$?\d+|entry level|starting at)\b/i;
+
+/**
+ * FTS ranks by text relevance, which cannot answer "what's your cheapest". Asking the
+ * model to rank a twelve-item slice invites a confident superlative about a catalog it
+ * has never seen, so price questions get the actual price-ordered head of the catalog.
+ */
+function cheapestSellable(db: ReturnType<typeof getDb>, brandId: string, limit: number): RetrievedProduct[] {
+  return db
+    .prepare(
+      `select id, sku, variant_id, title, price_cents, currency, available,
+              product_type, description, url, image_url
+       from product where brand_id = ? and sellable = 1 and available = 1
+       order by price_cents asc limit ?`,
+    )
+    .all(brandId, limit) as RetrievedProduct[];
+}
 
 export function retrieve(opts: {
   brandId: string;
@@ -52,23 +80,25 @@ export function retrieve(opts: {
   const history = recentTurns(customerId, 8);
 
   /*
-   * Retrieval keys off the conversation, not just the latest message. "add one bottle and
-   * check me out" carries no product terms, so querying it alone returns a catalog slice
-   * without the wine under discussion — and the no-invented-SKU rule then makes the agent
-   * confidently deny carrying something it sells. The last few customer messages are
-   * folded into the query so the subject of the conversation survives a follow-up.
+   * Retrieval keys off the conversation, not just the latest message. "give me that one"
+   * carries no product terms, so querying it alone returns a slice without the wine under
+   * discussion — and the no-invented-SKU rule then makes the agent deny carrying something
+   * it just recommended.
+   *
+   * Both sides of the conversation matter, and the agent's own replies matter more than
+   * they look: when the customer says "that one", the referent was named by the agent,
+   * never by them.
    */
-  const recentCustomerText = history
-    .filter((t) => t.direction === 'in' && t.text)
-    .slice(-3)
-    .map((t) => t.text!)
-    .join(' ');
+  const recentText = [
+    ...history.filter((t) => t.direction === 'in' && t.text).slice(-3).map((t) => t.text!),
+    ...history.filter((t) => t.direction === 'out' && t.text).slice(-2).map((t) => t.text!),
+  ].join(' ');
 
   const sellableCount = (
     db.prepare('select count(*) c from product where brand_id = ? and sellable = 1').get(brandId) as { c: number }
   ).c;
 
-  const query = toFtsQuery(`${message} ${recentCustomerText}`);
+  const query = toFtsQuery(`${message} ${recentText}`);
   let products: RetrievedProduct[];
 
   if (sellableCount <= SMALL_CATALOG) {
@@ -91,6 +121,13 @@ export function retrieve(opts: {
       .all(query, brandId, limit) as RetrievedProduct[];
   } else {
     products = [];
+  }
+
+  const priceOrdered = PRICE_INTENT.test(message);
+  if (priceOrdered) {
+    const cheap = cheapestSellable(db, brandId, 8);
+    const seen = new Set(products.map((p) => p.id));
+    products = [...cheap.filter((p) => !seen.has(p.id)), ...products];
   }
 
   // Anything already in the cart stays in context regardless of the current message.
@@ -118,6 +155,7 @@ export function retrieve(opts: {
 
   return {
     products,
+    priceOrdered,
     policies,
     facts: currentFacts(customerId),
     history,

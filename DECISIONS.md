@@ -109,6 +109,49 @@ blocked in about a second and hard-stops on blocked, naming the wall.
 A product that says "I can't read this site and here's why" is more credible than one that
 always appears to succeed.
 
+## 11. Retrieval keys off the conversation, not the newest message
+
+Found three times, in three costumes, by using it:
+
+1. "add one bottle and check me out" carries no product terms, so querying it alone
+   returned a slice without the wine under discussion — and rule 2 (never name a SKU
+   outside the retrieved set) then made the agent deny carrying something it sells.
+2. Folding in only the customer's messages was not enough. When the customer says "give
+   me that one", the referent was named by the *agent*, never by them.
+3. Even with both sides folded in, the token cap was applied before deduplication, so a
+   repetitive conversation spent all twelve slots on filler and the product name in the
+   agent's reply never reached the index.
+
+Each one produced a confident, wrong answer while every rail passed. The rails were
+working; retrieval was starving them.
+
+## 12. The reply and the action must agree
+
+Live, the agent said "adding the Sparkling Moscato to your cart" and wrote a $59 Pink
+Shimmer. Every existing rail passed: the SKU was real, sellable, in the catalog, and the
+price was resolved from the database.
+
+`CART_MISMATCH` compares the products named in the reply against the products in the
+cart actions and blocks the write when they disagree. A checkout card that contradicts
+the sentence above it is worse than a refusal, because the customer has no reason to
+doubt it.
+
+This is the rail that argues best for the whole approach: correctness here is not a
+property of the model's output, it is a property of the *agreement* between two things
+the model produced independently.
+
+## 13. Price rankings are answerable, not forbidden
+
+FTS ranks by text relevance, which cannot answer "what's your cheapest" — so asking a
+model to rank a twelve-item slice invites a confident superlative about a catalog it has
+never seen. Price-intent questions get the genuinely price-ordered head of the catalog
+instead, and the prompt is told the list is complete at the low end so it answers rather
+than hedging.
+
+`UNVERIFIED_SUPERLATIVE` warns (not blocks) when a ranking claim is made over an ordinary
+slice, and stands down when the slice really is price-ordered. It is a visibility rail:
+the claim is usually true, and an operator should still be able to see it was made.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

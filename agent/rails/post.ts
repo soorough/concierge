@@ -17,6 +17,8 @@ export type PostRailContext = {
   ageVerified: boolean;
   restrictedRegions: string[];
   customerRegion: string | null;
+  /** When the catalog slice is the price-ordered head, a price ranking is verifiable. */
+  priceOrdered?: boolean;
 };
 
 export type PostRailResult = {
@@ -36,8 +38,49 @@ const ESCALATION_REPLY =
 const SPELLED_PRICE =
   /\b(?:around|about|roughly|approximately|circa|just under|just over|nearly)?\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)[\w\s-]{0,12}\s*(?:dollars|bucks|usd)\b/i;
 const NUMERIC_PRICE = /\$\s?\d[\d,]*(?:\.\d{2})?/;
+/**
+ * Retrieval hands the model a slice of the catalog, not the catalog, so any ranking
+ * claim is unverifiable from where the model sits. This warns rather than blocks —
+ * the claim is often correct, but an operator should be able to see it was made.
+ */
+const SUPERLATIVE =
+  /\b(cheapest|most affordable|least expensive|lowest[- ]priced|best[- ]selling|most popular|our best\b|top[- ]rated|only one we)\b/i;
+
+const NEGATED = /\b(don't|do not|can't|cannot|couldn't|won't|not able|no way to|unable|without|which is|whether)\b/i;
+
 const OFFER =
   /(\d{1,2}\s?%\s?off|percent off|coupon|promo\s?code|discount code|voucher|free\s+(?:bottle|item|gift)\b)/i;
+
+/** Words that appear in half a catalog and so identify nothing. */
+const TITLE_NOISE = new Set([
+  'wine','wines','bottle','bottles','the','and','with','for','our','red','white','rose',
+  'pack','set','gift','box','case','trio','duo','collection','bundle','edition','reserve',
+  'nv','ml','oz','x2','x4','x6',
+]);
+
+function distinctiveTokens(title: string): string[] {
+  return Array.from(
+    new Set(
+      title
+        .toLowerCase()
+        .split(/[^a-z0-9é]+/)
+        .filter((t) => t.length >= 4 && !TITLE_NOISE.has(t) && !/^\d+$/.test(t)),
+    ),
+  );
+}
+
+/**
+ * A product counts as named in the reply when most of what makes its title distinctive
+ * appears there — enough to tell "Sparkling Moscato" from "Pink Shimmer", without
+ * demanding an exact quotation the model was never asked to produce.
+ */
+function namedIn(reply: string, title: string): boolean {
+  const tokens = distinctiveTokens(title);
+  if (!tokens.length) return false;
+  const hay = reply.toLowerCase();
+  const hits = tokens.filter((t) => hay.includes(t)).length;
+  return hits / tokens.length >= 0.6;
+}
 
 export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailResult {
   const events: RailEvent[] = [];
@@ -94,6 +137,20 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     actions = actions.filter((a) => a.type !== 'show_checkout');
   }
 
+  // Heuristic: a sentence that declines to rank ("I can't say which is cheapest") is
+  // the behaviour this rail wants, so flagging it would train the operator to ignore it.
+  const superlativeSentence = ctx.priceOrdered ? undefined : reply
+    .split(/(?<=[.!?])\s+/)
+    .find((sentence) => SUPERLATIVE.test(sentence) && !NEGATED.test(sentence));
+  const superlative = superlativeSentence?.match(SUPERLATIVE);
+  if (superlative) {
+    events.push({
+      level: 'warn',
+      code: 'UNVERIFIED_SUPERLATIVE',
+      detail: `ranking claim over a retrieved slice: "${superlative[0]}"`,
+    });
+  }
+
   // 4. Products the model named must exist and be sellable.
   for (const a of actions) {
     if (!a.sku) continue;
@@ -109,6 +166,34 @@ export function runPostRails(out: ModelOutput, ctx: PostRailContext): PostRailRe
     }
   }
   if (escalated) actions = actions.filter((a) => !a.sku);
+
+  /*
+   * 4b. The reply and the action must agree.
+   *
+   * Every other rail passed while the agent said "adding the Sparkling Moscato" and wrote
+   * a $59 Pink Shimmer to the cart: the SKU was real, sellable, and in the catalog. A
+   * checkout card that contradicts the sentence above it is worse than a refusal, because
+   * the customer has no reason to doubt it.
+   */
+  const namedProducts = ctx.catalog.filter((p) => namedIn(reply, p.title));
+  if (namedProducts.length) {
+    const namedKeys = new Set(namedProducts.map((p) => (p.sku || p.id).toLowerCase()));
+    const contradicting = actions.filter(
+      (a) => a.type === 'add_to_cart' && a.sku && !namedKeys.has(a.sku.toLowerCase()),
+    );
+    if (contradicting.length) {
+      escalated = true;
+      const added = ctx.catalog.find(
+        (p) => (p.sku || p.id).toLowerCase() === contradicting[0].sku!.toLowerCase(),
+      );
+      events.push({
+        level: 'block',
+        code: 'CART_MISMATCH',
+        detail: `reply names "${namedProducts[0].title}" but the action adds "${added?.title ?? contradicting[0].sku}"`,
+      });
+      actions = actions.filter((a) => !contradicting.includes(a));
+    }
+  }
 
   // 5. Age. On an alcohol brand the checkout card is withheld until confirmation.
   const needsAgeCheck =

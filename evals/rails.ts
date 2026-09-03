@@ -166,3 +166,114 @@ export const RAIL_CASES: RailCase[] = [
     },
   },
 ];
+
+RAIL_CASES.push(
+  {
+    name: 'a ranking claim over a retrieved slice is flagged',
+    run: () => {
+      const r = runPostRails(out({ reply: 'The Moscato is our most affordable bottle.' }), baseCtx());
+      return {
+        pass: r.events.some((e) => e.code === 'UNVERIFIED_SUPERLATIVE') && !r.escalated,
+        got: r.events.map((e) => e.code).join(','),
+      };
+    },
+  },
+  {
+    name: 'a flagged superlative still delivers the reply',
+    run: () => {
+      const r = runPostRails(out({ reply: 'Our best-selling red is the Vintner Cabernet.' }), baseCtx());
+      return { pass: r.reply.includes('Vintner Cabernet'), got: r.reply };
+    },
+  },
+);
+
+RAIL_CASES.push({
+  name: 'declining to rank is not flagged as a ranking claim',
+  run: () => {
+    const r = runPostRails(
+      out({ reply: "I don't have the full catalog, so I can't say which is cheapest." }),
+      baseCtx(),
+    );
+    return {
+      pass: !r.events.some((e) => e.code === 'UNVERIFIED_SUPERLATIVE'),
+      got: r.events.map((e) => e.code).join(',') || '(none)',
+    };
+  },
+});
+
+RAIL_CASES.push({
+  name: 'a price ranking is not flagged when the slice is price-ordered',
+  run: () => {
+    const r = runPostRails(
+      out({ reply: 'The Sparkling Moscato is our cheapest at {{price:VCS-2023}}.' }),
+      baseCtx({ priceOrdered: true }),
+    );
+    return {
+      pass: !r.events.some((e) => e.code === 'UNVERIFIED_SUPERLATIVE'),
+      got: r.events.map((e) => e.code).join(','),
+    };
+  },
+});
+
+RAIL_CASES.push(
+  {
+    /*
+     * Regression. Live, the agent said "adding the Sparkling Moscato" and wrote a $59
+     * Pink Shimmer to the cart. Every other rail passed — the SKU was real and sellable.
+     */
+    name: 'a cart write contradicting the reply is blocked',
+    run: () => {
+      const ctx = baseCtx({
+        catalog: [
+          { ...baseCtx().catalog[0] },
+          {
+            ...baseCtx().catalog[0],
+            id: 'prod_2', sku: 'SHIM-BRUT', title: 'I Love You More Than Wine Pink Shimmer',
+            price_cents: 5900,
+          },
+        ],
+        allSellableSkus: new Set(['vcs-2023', 'shim-brut']),
+      });
+      const r = runPostRails(
+        out({
+          reply: 'Got it — adding the Vintner Cabernet Sauvignon to your cart.',
+          actions: [{ type: 'add_to_cart', sku: 'SHIM-BRUT', qty: 1 }],
+        }),
+        ctx,
+      );
+      return {
+        pass: r.events.some((e) => e.code === 'CART_MISMATCH') && r.actions.length === 0,
+        got: r.events.map((e) => e.code).join(','),
+      };
+    },
+  },
+  {
+    name: 'a cart write matching the reply is allowed',
+    run: () => {
+      const r = runPostRails(
+        out({
+          reply: 'Adding the Vintner Cabernet Sauvignon 2023 now.',
+          actions: [{ type: 'add_to_cart', sku: 'VCS-2023', qty: 1 }],
+        }),
+        baseCtx(),
+      );
+      return {
+        pass: !r.events.some((e) => e.code === 'CART_MISMATCH') && r.actions.length === 1,
+        got: r.events.map((e) => e.code).join(','),
+      };
+    },
+  },
+  {
+    name: 'a reply that names no product does not trigger a mismatch',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Added to your cart.', actions: [{ type: 'add_to_cart', sku: 'VCS-2023', qty: 1 }] }),
+        baseCtx(),
+      );
+      return {
+        pass: !r.events.some((e) => e.code === 'CART_MISMATCH') && r.actions.length === 1,
+        got: r.events.map((e) => e.code).join(','),
+      };
+    },
+  },
+);

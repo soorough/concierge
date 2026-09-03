@@ -83,3 +83,49 @@ export const RETRIEVAL_CASES: Case[] = [
     },
   },
 ];
+
+RETRIEVAL_CASES.push({
+  /*
+   * Regression. "give me that one" refers to something the agent named, not the
+   * customer, so folding in only inbound messages still starved retrieval and the
+   * agent escalated on a wine it had recommended one turn earlier.
+   */
+  name: 'a referent named only by the agent survives into the next turn',
+  run: () => {
+    const c = getOrCreateCustomer('b1', 's-referent');
+    recordTurn({ customerId: c.id, direction: 'in', text: 'what is your cheapest?' });
+    recordTurn({ customerId: c.id, direction: 'out', text: 'The Vintner Chardonnay 2023 is our most affordable at $27.00.' });
+    const r = retrieve({ brandId: 'b1', customerId: c.id, message: 'okay give me that one' });
+    return {
+      pass: r.products.some((p) => p.title === 'Vintner Chardonnay 2023'),
+      got: r.products.map((p) => p.title).slice(0, 3).join(', ') || '(empty)',
+    };
+  },
+});
+
+RETRIEVAL_CASES.push({
+  /*
+   * Regression. The token cap is applied after deduplication because a real conversation
+   * repeats itself: undeduplicated, twelve slots filled with filler from the newest
+   * message and the product name in the agent's reply never reached the index.
+   */
+  name: 'a referent survives a long, repetitive conversation',
+  run: () => {
+    const c = getOrCreateCustomer('b1', 's-long');
+    const chatter = [
+      'yo whats up I want a cheap ass wine please help me out here',
+      'okay cool sounds good what else have you got for me today',
+      'right okay give me something good then please',
+    ];
+    for (const m of chatter) {
+      recordTurn({ customerId: c.id, direction: 'in', text: m });
+      recordTurn({ customerId: c.id, direction: 'out', text: 'Sure, happy to help with that.' });
+    }
+    recordTurn({ customerId: c.id, direction: 'out', text: 'Our cheapest is the Vintner Chardonnay 2023 at $27.00.' });
+    const r = retrieve({ brandId: 'b1', customerId: c.id, message: 'okay give me that one then please' });
+    return {
+      pass: r.products.some((p) => p.title === 'Vintner Chardonnay 2023'),
+      got: r.products.map((p) => p.title).slice(0, 3).join(', ') || '(empty)',
+    };
+  },
+});
