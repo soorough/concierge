@@ -1,13 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../store/db.js';
-import { getOrCreateCustomer, recordTurn, recentTurns, railEventsFor } from '../../store/session.js';
+import { getOrCreateCustomer, recentTurns, railEventsFor } from '../../store/session.js';
+import { runTurn } from '../../agent/loop.js';
+import { getCart, setQty, clearCart } from '../../agent/cart.js';
+import { currentFacts, allFacts, writeFact } from '../../store/ledger.js';
+import type { StoredBrand } from '../../store/queries.js';
 
 /**
  * The thread surface. Every message round-trips through SQLite — nothing is held in
  * memory on the client, so a reload replays the real conversation.
  *
- * The agent loop is not wired in yet: this stage exists to prove the surface, the
- * session scoping, and persistence before any model call is involved.
+ * Threads are scoped to (brand, session) so simultaneous visitors never share a
+ * customer row, a cart, or a fact ledger.
  */
 export async function registerThreadRoutes(app: FastifyInstance) {
   app.post<{ Body: { brandId: string; sessionId: string; text: string } }>(
@@ -18,28 +22,17 @@ export async function registerThreadRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'brandId, sessionId and text are required' });
       }
       const brand = getDb().prepare('select * from brand where id = ?').get(brandId) as
-        | { id: string; name: string }
+        | StoredBrand
         | undefined;
       if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
 
-      const started = Date.now();
-      const customer = getOrCreateCustomer(brandId, sessionId);
-
-      recordTurn({ customerId: customer.id, direction: 'in', text });
-
-      // Placeholder until the agent loop lands. Deliberately not a canned "reply" —
-      // it echoes what was stored so the round-trip is visibly real.
-      const stored = recentTurns(customer.id, 1)[0];
-      const replyText = `stored "${stored?.text ?? ''}" as ${stored?.id} — agent loop not wired yet`;
-
-      const outId = recordTurn({
-        customerId: customer.id,
-        direction: 'out',
-        text: replyText,
-        latencyMs: Date.now() - started,
-      });
-
-      return { turnId: outId, customerId: customer.id, reply: replyText, latencyMs: Date.now() - started };
+      try {
+        const result = await runTurn({ brand: brand as StoredBrand, sessionId, text });
+        return result;
+      } catch (e) {
+        req.log.error(e);
+        return reply.code(500).send({ error: (e as Error).message });
+      }
     },
   );
 
@@ -63,4 +56,79 @@ export async function registerThreadRoutes(app: FastifyInstance) {
       };
     },
   );
+
+  /** Cart mutations are server-side: the subtotal always recomputes from DB prices. */
+  app.post<{ Body: { brandId: string; sessionId: string; productId: string; qty: number } }>(
+    '/api/cart/qty',
+    async (req, reply) => {
+      const { brandId, sessionId, productId, qty } = req.body ?? {};
+      const brand = getDb().prepare('select * from brand where id = ?').get(brandId) as StoredBrand | undefined;
+      if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
+      const customer = getOrCreateCustomer(brandId, sessionId);
+      setQty(customer.id, productId, qty);
+      return getCart(customer.id, brand.domain, brand.ingest_path);
+    },
+  );
+
+  app.post<{ Body: { brandId: string; sessionId: string } }>('/api/cart/clear', async (req, reply) => {
+    const { brandId, sessionId } = req.body ?? {};
+    const brand = getDb().prepare('select * from brand where id = ?').get(brandId) as StoredBrand | undefined;
+    if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
+    const customer = getOrCreateCustomer(brandId, sessionId);
+    clearCart(customer.id);
+    return getCart(customer.id, brand.domain, brand.ingest_path);
+  });
+
+  /** The age gate is a real state change, not a UI flag. */
+  app.post<{ Body: { brandId: string; sessionId: string; confirmed: boolean } }>(
+    '/api/age',
+    async (req, reply) => {
+      const { brandId, sessionId, confirmed } = req.body ?? {};
+      const customer = getOrCreateCustomer(brandId, sessionId);
+      if (confirmed) {
+        getDb().prepare('update customer set age_verified_at = ? where id = ?').run(Date.now(), customer.id);
+      }
+      return { ageVerified: confirmed };
+    },
+  );
+
+  /**
+   * Second ingest source. A rep's note about a customer is third-party: it lands in the
+   * same ledger and is outranked by anything the customer says themselves.
+   */
+  app.post<{ Body: { brandId: string; sessionId: string; note: string } }>(
+    '/api/fieldnote',
+    async (req, reply) => {
+      const { brandId, sessionId, note } = req.body ?? {};
+      if (!note?.trim()) return reply.code(400).send({ error: 'note is required' });
+      const customer = getOrCreateCustomer(brandId, sessionId);
+      const { extractFieldNoteFacts } = await import('../../agent/fieldnote.js');
+      const extracted = await extractFieldNoteFacts(note);
+      const results = extracted.map((f) =>
+        writeFact({
+          customerId: customer.id,
+          predicate: f.predicate,
+          object: f.object,
+          confidence: f.confidence,
+          source: 'field_note',
+        }),
+      );
+      return { extracted, results, facts: currentFacts(customer.id) };
+    },
+  );
+
+  app.get<{ Querystring: { brandId: string; sessionId: string } }>('/api/facts', async (req, reply) => {
+    const { brandId, sessionId } = req.query ?? {};
+    if (!brandId || !sessionId) return reply.code(400).send({ error: 'brandId and sessionId are required' });
+    const customer = getOrCreateCustomer(brandId, sessionId);
+    return { current: currentFacts(customer.id), all: allFacts(customer.id) };
+  });
+
+  app.get<{ Querystring: { brandId: string; sessionId: string } }>('/api/cart', async (req, reply) => {
+    const { brandId, sessionId } = req.query ?? {};
+    const brand = getDb().prepare('select * from brand where id = ?').get(brandId) as StoredBrand | undefined;
+    if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
+    const customer = getOrCreateCustomer(brandId, sessionId);
+    return getCart(customer.id, brand.domain, brand.ingest_path);
+  });
 }

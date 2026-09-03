@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS brand (
   detected_sms_vendor TEXT,      -- attentive | postscript | klaviyo | emotive | null
   free_ship_threshold INTEGER,
   restricted_regions_json TEXT,
+  offers_json TEXT,
   products_total INTEGER DEFAULT 0,
   products_excluded INTEGER DEFAULT 0,
   missing_json TEXT,             -- what ingest could not find
