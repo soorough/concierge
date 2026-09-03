@@ -303,6 +303,47 @@ The wider lesson is about where the demo would have failed. Every rail in the bu
 the model. Nothing was checking the *ingest*, and a bad ingest produces confident, rail-clean,
 hundred-fold-wrong answers.
 
+## 22. Category has to switch something on
+
+`category` was documented as switching on "the right policy module", and only `alcohol`
+ever did. Evaluating Transparent Labs — 68 sellable supplements, correctly classified —
+the agent volunteered that "the research doesn't support a link between creatine and hair
+loss", that its products "meet FDA standards", and that everything is "third-party tested
+and made with clinically studied ingredients". None of it grounded in anything the brand
+published.
+
+`HEALTH_CLAIM` blocks medical, scientific and regulatory assertions. Negation is no defence
+here, unlike the superlative rail: denying a health effect is as much a medical claim as
+asserting one, and it is exactly the class of statement that draws regulatory attention.
+
+Describing a product in the brand's own words stays fine — that copy lives in the catalog.
+What is blocked is the agent reasoning about medicine on the brand's behalf.
+
+## 23. Policy pages are mostly not policy
+
+A fetched policy page is a whole rendered page: nav, cookie banner, footer, newsletter
+pitch. Between 13% and 35% of the corpus across three brands. That is wasted cached
+context, and worse, a cookie banner sitting inside text the agent treats as authoritative.
+
+Lines appearing in *every* policy page are dropped as chrome. The first attempt used "most
+pages" and removed ONEHOPE's actual shipping policy, which they repeat across their
+shipping page and their FAQ — 3,036 characters became 31 and nothing said so. Hence two
+guards: a line must appear in every document, and a document whose stripping would remove
+more than 40% is left alone. Losing a policy silently is far worse than carrying chrome.
+
+Truncation is now reported too. Every brand's terms had been exactly 20,000 characters
+long, silently, because the limit was applied without a word.
+
+## 24. A restart that does not restart invalidates everything after it
+
+Several ingests in this session ran against stale code, because `pkill -f "tsx server"`
+leaves the npm wrapper alive often enough to matter. The measurements looked fine and were
+meaningless.
+
+`npm run restart` now kills by port. The general point is worth keeping: an unreliable
+feedback loop is more dangerous than a missing one, because it produces confident readings
+of code that is not running.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

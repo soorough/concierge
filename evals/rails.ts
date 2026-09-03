@@ -526,3 +526,74 @@ RAIL_CASES.push(
     },
   },
 );
+
+RAIL_CASES.push(
+  {
+    /*
+     * Regression. A supplement brand's agent volunteered "the research doesn't support a
+     * link between creatine and hair loss" — a scientific claim grounded in nothing the
+     * brand published. Denying a health effect is as much a medical claim as asserting one.
+     */
+    name: 'a scientific claim about a health effect is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: "The research doesn't support a link between creatine and hair loss." }),
+        ctx({ category: 'supplement' }),
+      );
+      return { pass: fired(r.events, 'HEALTH_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: 'a regulatory approval claim is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Our products are FDA approved and third-party tested.' }),
+        ctx({ category: 'supplement' }),
+      );
+      return { pass: fired(r.events, 'HEALTH_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: 'a cure claim is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Red wine prevents heart disease, so any of our Cabernets will do.' }),
+        ctx(),
+      );
+      return { pass: fired(r.events, 'HEALTH_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: "describing a product in the brand's own words is not a health claim",
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Post Workout has tart cherry and glutamine to support recovery after training.' }),
+        ctx({ category: 'supplement' }),
+      );
+      return { pass: !fired(r.events, 'HEALTH_CLAIM') && !r.escalated, got: codes(r.events) };
+    },
+  },
+);
+
+RAIL_CASES.push(
+  {
+    name: 'an FDA statement in any phrasing is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: "Supplements aren't pre-approved by the FDA like drugs are." }),
+        ctx({ category: 'supplement' }),
+      );
+      return { pass: fired(r.events, 'HEALTH_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+  {
+    name: 'a clinical-backing claim is blocked',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'Everything is third-party tested and made with clinically studied ingredients.' }),
+        ctx({ category: 'supplement' }),
+      );
+      return { pass: fired(r.events, 'HEALTH_CLAIM') && r.escalated, got: codes(r.events) };
+    },
+  },
+);

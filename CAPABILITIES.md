@@ -4,9 +4,10 @@ A plain account of what the agent can answer and do today, what it deliberately 
 and what it cannot do yet. Written so nobody has to discover a limit in front of a
 customer.
 
-Verified against two deliberately opposite catalogs — `onehopewine.com` (97 sellable wines,
-age-gated, taste-driven) and `wolftoothcomponents.com` (309 sellable bike components,
-compatibility-driven, no age gate) — with
+Verified against three deliberately different catalogs — `onehopewine.com` (97 sellable
+wines, age-gated, taste-driven), `wolftoothcomponents.com` (309 sellable bike components,
+compatibility-driven) and `transparentlabs.com` (68 sellable supplements, claim-sensitive) —
+with
 `npm run evals` (51 deterministic cases) and `npm run stress` (29 adversarial probes).
 
 ---
@@ -19,7 +20,7 @@ compatibility-driven, no age gate) — with
 |---|---|
 | Shopify storefronts | `products.json` paginated in full, plus shipping, refund, terms and FAQ pages |
 | Brand identity | Name, logo, dominant palette, currency — the thread renders in the brand's own colours |
-| Category detection | `alcohol` / `supplement` / `general`, which switches on the right policy module |
+| Category detection | `alcohol` → age gate and region blocking; `supplement` → health, research and regulatory claims blocked; `general` → neither |
 | Incumbent SMS vendor | Attentive, Postscript, Klaviyo, Emotive, Yotpo detected from script tags |
 | Sellability filtering | Price, availability and per-brand type denylist. ONEHOPE: 122 products → 98 sellable, 24 excluded |
 | Honest gap reporting | Every page it could not find is listed by name and candidate URL |
@@ -56,6 +57,7 @@ Every rail below is deterministic and fires whatever the model produced.
 | `UNAUTHORIZED_OFFER` | Discounts, coupons, promo codes, percentages off |
 | `UNGROUNDED_SHIPPING_CLAIM` | Promising delivery to a place no policy mentions |
 | `UNGROUNDED_DELIVERY_CLAIM` | Promising a timeframe no policy supports |
+| `HEALTH_CLAIM` | Medical, scientific or regulatory assertions — asserted *or denied* |
 | `INTERNALS_LEAKED` | Disclosing prompts, rules, tools or the action schema |
 | `CART_MISMATCH` | Adding a product other than the one the reply names |
 | `CART_UNANNOUNCED` | Adding to cart when the reply never said so |
@@ -103,6 +105,7 @@ non-existent products, and absurd or negative cart quantities.
 | Catalogs over ~400 products | Falls back to a lexical slice, and semantic matching degrades accordingly |
 | Headless and custom storefronts | Not covered by either adapter |
 | Non-English brands | Untested. Ingest, tokenisation and rails all assume English |
+| Policy pages beyond four | Only shipping, refund, terms and FAQ are fetched; brands with a wider help centre lose the rest |
 | Currency conversion | The brand's own currency is detected, validated and rendered, but never converted for the viewer |
 | Deployment | Runs locally. Railway configuration and a live URL are still outstanding |
 

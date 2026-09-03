@@ -44,6 +44,9 @@ function servedCurrency(res: Response): string | null {
 
 export class CurrencyMismatchError extends Error {}
 
+/** A median above this suggests minor units or a currency mix-up rather than real pricing. */
+const IMPLAUSIBLE_MEDIAN_CENTS = 150_000;
+
 const POLICY_PATHS: { path: string; kind: PackPolicy['kind'] }[] = [
   { path: '/policies/shipping-policy', kind: 'shipping' },
   { path: '/policies/refund-policy', kind: 'returns' },
@@ -84,9 +87,67 @@ async function fetchAllProducts(
   return out;
 }
 
+const POLICY_CHAR_LIMIT = 20_000;
+
+/** Refuse to strip a document if the heuristic wants to remove more than this share. */
+const MAX_CHROME_SHARE = 0.4;
+
+/**
+ * Policy pages are whole rendered pages, so most of what comes back is the site's nav,
+ * cookie banner, footer and newsletter pitch rather than policy. That boilerplate repeats
+ * across every page from the same site, so lines appearing in nearly all of them are
+ * dropped — 13% to 35% of the corpus across the brands tested.
+ *
+ * It is not only wasted context. A cookie banner or a marketing line sitting inside the
+ * text the agent treats as authoritative is a source of confident nonsense.
+ */
+function stripSharedChrome<T extends { kind: PackPolicy['kind']; text: string }>(
+  docs: T[],
+): { docs: T[]; removedChars: number } {
+  if (docs.length < 2) return { docs, removedChars: 0 };
+
+  const appearances = new Map<string, number>();
+  for (const doc of docs) {
+    for (const line of new Set(doc.text.split('\n').map((l) => l.trim()).filter(Boolean))) {
+      appearances.set(line, (appearances.get(line) ?? 0) + 1);
+    }
+  }
+
+  /*
+   * A line must appear in *every* document to count as chrome. Requiring only "most"
+   * removed ONEHOPE's actual shipping policy, which they repeat across their shipping page
+   * and their FAQ — the corpus shrank from 3,036 characters to 31 and nothing said so.
+   */
+  const chrome = new Set(
+    [...appearances.entries()]
+      .filter(([line, count]) => count === docs.length && line.length < 120)
+      .map(([line]) => line),
+  );
+
+  let removedChars = 0;
+  const cleaned = docs.map((doc) => {
+    const kept: string[] = [];
+    let dropped = 0;
+    for (const line of doc.text.split('\n')) {
+      if (chrome.has(line.trim())) dropped += line.length + 1;
+      else kept.push(line);
+    }
+
+    // If stripping would gut a document, the heuristic is wrong for this site and the
+    // original is kept. Losing a policy silently is far worse than carrying some chrome.
+    if (dropped > doc.text.length * MAX_CHROME_SHARE) return doc;
+
+    removedChars += dropped;
+    return { ...doc, text: kept.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+  });
+
+  return { docs: cleaned, removedChars };
+}
+
 async function fetchPolicies(domain: string, onProgress: OnProgress) {
-  const found: PackPolicy[] = [];
+  const fetched: { kind: PackPolicy['kind']; text: string; sourceUrl: string }[] = [];
   const missing: string[] = [];
+
   await Promise.all(
     POLICY_PATHS.map(async ({ path, kind }) => {
       try {
@@ -94,7 +155,7 @@ async function fetchPolicies(domain: string, onProgress: OnProgress) {
         const text = stripHtml(body);
         // A 200 that renders a shell page is a miss, not a hit.
         if (res.ok && text.length > 400) {
-          found.push({ kind, text: text.slice(0, 20_000), sourceUrl: `https://${domain}${path}` });
+          fetched.push({ kind, text, sourceUrl: `https://${domain}${path}` });
         } else {
           missing.push(`${kind} (${path} returned ${res.status}, ${text.length} chars)`);
         }
@@ -103,6 +164,32 @@ async function fetchPolicies(domain: string, onProgress: OnProgress) {
       }
     }),
   );
+
+  const { docs: cleaned, removedChars } = stripSharedChrome(fetched);
+  if (removedChars > 0) {
+    onProgress({
+      type: 'stage',
+      stage: 'policies',
+      detail: `removed ${removedChars.toLocaleString()} chars of shared page chrome`,
+    });
+  }
+
+  const found: PackPolicy[] = cleaned.map((doc, i) => {
+    const truncated = doc.text.length > POLICY_CHAR_LIMIT;
+    // Truncation used to be silent, which made every brand's terms exactly 20,000
+    // characters long and nobody any the wiser.
+    if (truncated) {
+      missing.push(
+        `${doc.kind} truncated at ${POLICY_CHAR_LIMIT.toLocaleString()} of ${doc.text.length.toLocaleString()} chars`,
+      );
+    }
+    return {
+      kind: doc.kind,
+      text: doc.text.slice(0, POLICY_CHAR_LIMIT),
+      sourceUrl: fetched[i].sourceUrl,
+    };
+  });
+
   onProgress({ type: 'count', label: 'policies', value: found.length });
   return { found, missing };
 }
@@ -169,6 +256,29 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
       imageUrl: p.images?.[0]?.src ?? null,
     };
   });
+
+  /*
+   * A price distribution, reported rather than assumed correct.
+   *
+   * The INR ingest stored a $54.95 part as $5,400 and every downstream rail passed, because
+   * the rails check the model and nothing was checking the ingest. The currency guard makes
+   * that specific failure impossible; this makes the next one visible, whatever its cause.
+   */
+  const prices = products.map((p) => p.priceCents).filter((c) => c > 0).sort((a, b) => a - b);
+  if (prices.length) {
+    const median = prices[Math.floor(prices.length / 2)];
+    onProgress({
+      type: 'stage',
+      stage: 'prices',
+      detail: `${currency} ${(prices[0] / 100).toFixed(2)} – ${(prices[prices.length - 1] / 100).toFixed(2)}, median ${(median / 100).toFixed(2)}`,
+    });
+    if (median > IMPLAUSIBLE_MEDIAN_CENTS) {
+      onProgress({
+        type: 'warn',
+        message: `median price is ${currency} ${(median / 100).toFixed(2)} — unusually high for consumer goods, check the currency`,
+      });
+    }
+  }
 
   const policyText = policies.map((p) => p.text).join('\n');
   const { offers, freeShipThreshold } = extractOffers([meta.html, policyText]);

@@ -12,7 +12,8 @@
     "start": "node dist/server/index.js",
     "evals": "tsx evals/run.ts",
     "stress": "tsx evals/adversarial.ts",
-    "db:reset": "rm -f data/concierge.db && tsx store/migrate.ts"
+    "db:reset": "rm -f data/concierge.db && tsx store/migrate.ts",
+    "restart": "scripts/restart.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

@@ -30,6 +30,33 @@ const INTERNALS =
 const DELIVERY_CLAIM =
   /\b(?:arrive|arrives|arriving|deliver(?:y|ed|s)?|ship(?:s|ped|ping)?|take[sn]?|get(?:s)? (?:to|there))\b[^.]{0,40}?\b(\d{1,2})\s*(?:-|–|to)?\s*(\d{1,2})?\s*(business\s+)?(?:day|week)s?\b/i;
 
+/**
+ * Medical, scientific and regulatory assertions.
+ *
+ * A supplement brand's agent said "the research doesn't support a link between creatine
+ * and hair loss" and "our products meet FDA standards" — neither grounded in anything the
+ * brand published. Negation does not help here: denying a health effect is as much a
+ * medical claim as asserting one, and it is the class of statement that gets consumer
+ * brands into regulatory trouble.
+ *
+ * Describing a product in the brand's own words stays fine; that copy is in the catalog.
+ * What is blocked is the agent reasoning about medicine on the brand's behalf.
+ */
+const HEALTH_CLAIM = new RegExp(
+  [
+    String.raw`\b(cures?|cured|curing|treats?|treating|prevents?|preventing|heals?|diagnos\w*)\b`,
+    String.raw`\b(research|studies|science|evidence|clinical(ly)? (proven|shown|studied))\b[^.]{0,40}\b(shows?|support|supports|prove[sn]?|suggests?|confirms?)\b`,
+    // Both orderings: "FDA approved" and "pre-approved by the FDA".
+    String.raw`\bFDA\b[^.]{0,30}\b(approv\w*|clear\w*|certif\w*|regulat\w*|evaluat\w*)\b`,
+    String.raw`\b(approv\w*|clear\w*|certif\w*|regulat\w*|evaluat\w*)\b[^.]{0,30}\bFDA\b`,
+    String.raw`\b(clinical(ly)?|scientific(ally)?|lab)\s+(studied|proven|tested|validated|backed)\b`,
+    String.raw`\bthird[\s-]party\s+tested\b`,
+    String.raw`\b(cause[sd]?|linked to|associated with)\b[^.]{0,40}\b(hair loss|cancer|disease|liver|kidney|heart|infertility|damage)\b`,
+    String.raw`\b(safe|unsafe|dangerous)\b[^.]{0,30}\b(pregnan\w+|breastfeed\w+|medication|prescription|children)\b`,
+  ].join('|'),
+  'i',
+);
+
 /** Affirmative shipping claims about a named place. */
 const SHIPPING_CLAIM =
   /\b(?:we\s+(?:do\s+)?ship(?:s)?|we\s+deliver|shipping|ships?)\s+(?:to|into)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)/;
@@ -277,6 +304,19 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
         detail: `promised "${deliveryClaim[0].trim().slice(0, 48)}" with no policy support`,
       });
     }
+  }
+
+  /*
+   * 4e. The agent does not practise medicine on the brand's behalf.
+   */
+  const healthClaim = reply.match(HEALTH_CLAIM);
+  if (healthClaim) {
+    escalated = true;
+    events.push({
+      level: 'block',
+      code: 'HEALTH_CLAIM',
+      detail: `medical or regulatory assertion: "${healthClaim[0].trim().slice(0, 52)}"`,
+    });
   }
 
   // 5. Offers. Only what is on-site is authorised.
