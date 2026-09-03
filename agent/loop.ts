@@ -174,6 +174,7 @@ export async function runTurn(opts: {
     restrictedRegions: JSON.parse(brand.restricted_regions_json ?? '[]') as string[],
     customerRegion: customer.region,
     priceOrdered: retrieval.priceOrdered,
+    currency: brand.currency ?? 'USD',
     policyText: [
       ...retrieval.groundTruth.map((d) => d.text),
       ...retrieval.policies.map((p) => p.text),

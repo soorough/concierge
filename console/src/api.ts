@@ -47,7 +47,8 @@ const post = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(json);
 
 export const api = {
-  brands: (): Promise<{ id: string; domain: string; name: string }[]> => fetch('/api/brands').then(json),
+  brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
+    fetch('/api/brands').then(json),
   brand: (domain: string): Promise<Brand> => fetch(`/api/brand/${domain}`).then(json),
   preflight: (domain: string) => post('/api/preflight', { domain }),
   turn: (brandId: string, sessionId: string, text: string): Promise<TurnResult> =>

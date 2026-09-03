@@ -4,7 +4,9 @@ A plain account of what the agent can answer and do today, what it deliberately 
 and what it cannot do yet. Written so nobody has to discover a limit in front of a
 customer.
 
-Verified against `onehopewine.com` — 122 products, 98 sellable, 37 policy chunks — with
+Verified against two deliberately opposite catalogs — `onehopewine.com` (97 sellable wines,
+age-gated, taste-driven) and `wolftoothcomponents.com` (309 sellable bike components,
+compatibility-driven, no age gate) — with
 `npm run evals` (51 deterministic cases) and `npm run stress` (29 adversarial probes).
 
 ---
@@ -23,6 +25,8 @@ Verified against `onehopewine.com` — 122 products, 98 sellable, 37 policy chun
 | Honest gap reporting | Every page it could not find is listed by name and candidate URL |
 | Preflight classification | `shopify` / `crawl` / `blocked` in about a second, with the bot wall named |
 | Caching | Results cached per domain with the ingest timestamp shown and a re-ingest button that genuinely re-runs |
+| Currency validation | The shop's own currency is read from `/meta.json` and checked against what the storefront served; a mismatch aborts rather than storing wrong prices |
+| Multiple brands | Ingested brands are switchable from the console; threads, carts and ledgers stay scoped per brand |
 
 ### Conversation
 
@@ -99,7 +103,7 @@ non-existent products, and absurd or negative cart quantities.
 | Catalogs over ~400 products | Falls back to a lexical slice, and semantic matching degrades accordingly |
 | Headless and custom storefronts | Not covered by either adapter |
 | Non-English brands | Untested. Ingest, tokenisation and rails all assume English |
-| Multi-currency | Currency is read but not converted; prices render as the brand publishes them |
+| Currency conversion | The brand's own currency is detected, validated and rendered, but never converted for the viewer |
 | Deployment | Runs locally. Railway configuration and a live URL are still outstanding |
 
 ### Known weaknesses

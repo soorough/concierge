@@ -502,3 +502,27 @@ RAIL_CASES.push(
     },
   },
 );
+
+RAIL_CASES.push(
+  {
+    /*
+     * Regression. Ingesting a US storefront from India returned INR prices, which were
+     * stored under a hardcoded USD label — a $15 part would have been quoted as $1,500.
+     */
+    name: 'prices render in the brand currency, not a fixed symbol',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'That one is {{price:1}}.' }),
+        ctx({ currency: 'GBP' }),
+      );
+      return { pass: r.reply.includes('£29.00'), got: r.reply };
+    },
+  },
+  {
+    name: 'an ungrounded price is caught in a non-dollar currency',
+    run: () => {
+      const r = runPostRails(out({ reply: 'It is about ₹1500 I think.' }), ctx({ currency: 'INR' }));
+      return { pass: fired(r.events, 'UNGROUNDED_PRICE') && r.escalated, got: codes(r.events) };
+    },
+  },
+);

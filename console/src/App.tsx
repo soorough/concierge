@@ -15,6 +15,7 @@ function contrastInk(hex: string): string {
 
 export function App() {
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [brands, setBrands] = useState<{ domain: string; name: string }[]>([]);
   const [turns, setTurns] = useState<ThreadTurn[]>([]);
   const [facts, setFacts] = useState<{ current: Fact[]; all: Fact[] }>({ current: [], all: [] });
   const [cart, setCart] = useState<Cart | null>(null);
@@ -40,9 +41,20 @@ export function App() {
     setShowCheckout(lastOut?.payload?.card === 'checkout' && c.lines.length > 0);
   }, []);
 
+  const refreshBrands = useCallback(async () => {
+    try {
+      setBrands(await api.brands());
+    } catch {
+      /* the list is a convenience; ingest still works without it */
+    }
+  }, []);
+
   useEffect(() => {
     api.brands()
-      .then((list) => (list.length ? loadBrand(list[0].domain) : undefined))
+      .then((list) => {
+        setBrands(list);
+        return list.length ? loadBrand(list[0].domain) : undefined;
+      })
       .catch(() => undefined);
   }, [loadBrand]);
 
@@ -103,10 +115,24 @@ export function App() {
     <div className="shell">
       <header className="topbar">
         <span className="wordmark">Concierge</span>
-        {brand && (
-          <span className="stat">
-            <span>brand</span><b>{brand.domain}</b>
-          </span>
+        {brands.length > 0 && (
+          <label className="stat">
+            <span>brand</span>
+            {/* Once more than one brand is ingested, retyping the domain to switch is
+                friction with no purpose — every ingested brand is already in the DB. */}
+            <select
+              className="brandpick"
+              value={brand?.domain ?? ''}
+              onChange={(e) => loadBrand(e.target.value)}
+              aria-label="Brand"
+            >
+              {brands.map((b) => (
+                <option key={b.domain} value={b.domain}>
+                  {b.domain}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         <span className="spacer" />
         <span className="stat"><span>turns</span><b>{totals.turns}</b></span>
@@ -116,7 +142,13 @@ export function App() {
       </header>
 
       <div className="columns">
-        <Ingest brand={brand} onIngested={loadBrand} />
+        <Ingest
+          brand={brand}
+          onIngested={async (domain) => {
+            await loadBrand(domain);
+            await refreshBrands();
+          }}
+        />
 
         <div className="col col--stage">
           {brand ? (

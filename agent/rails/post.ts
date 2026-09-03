@@ -42,6 +42,8 @@ export type PostRailContext = {
   ageVerified: boolean;
   restrictedRegions: string[];
   customerRegion: string | null;
+  /** ISO code the brand prices in. Prices are rendered in it, never in a fixed symbol. */
+  currency?: string;
   /** When true, a price ranking is verifiable from what the model was given. */
   priceOrdered?: boolean;
   /** Policy text actually retrieved this turn, used to ground policy assertions. */
@@ -65,7 +67,16 @@ const ESCALATION_REPLY =
 /** Appended when the model itself asked for a human but its reply survived every rail. */
 const HANDOFF_SUFFIX = " I'll flag this for the team so someone can confirm.";
 
-const NUMERIC_PRICE = /\$\s?\d[\d,]*(?:\.\d{2})?/;
+/** Currency-marked amounts in any of the symbols or codes a brand might price in. */
+const NUMERIC_PRICE = /(?:[$£€₹¥]|\b(?:USD|EUR|GBP|INR|CAD|AUD)\b)\s?\d[\d,]*(?:\.\d{2})?/;
+
+export function formatMoney(cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
+  } catch {
+    return `${currency} ${(cents / 100).toFixed(2)}`;
+  }
+}
 
 /** The spelled-out forms the numeric rail cannot see. */
 const SPELLED_PRICE =
@@ -155,7 +166,7 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
       return '';
     }
     resolved++;
-    return `$${(product.price_cents / 100).toFixed(2)}`;
+    return formatMoney(product.price_cents, ctx.currency ?? product.currency ?? 'USD');
   });
 
   if (resolved) {

@@ -4,6 +4,18 @@ import { isIP } from 'node:net';
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
+/*
+ * Storefronts price in the viewer's market, and Node's fetch sends `accept-language: *` by
+ * default, which Shopify reads as an invitation to geolocate. Ingesting a US brand from
+ * India returned INR — $14.95 arriving as "1500.00".
+ *
+ * An empty Accept-Language suppresses that negotiation and returns the shop's own market.
+ * Verified: empty gives USD on every attempt, while `*`, `en` and `en-US` all give INR.
+ * The currency check at ingest stays regardless — this makes the right thing likely, and
+ * validation makes the wrong thing impossible to store.
+ */
+const BASE_HEADERS: Record<string, string> = { 'User-Agent': UA, 'Accept-Language': '' };
+
 /** RFC1918 + loopback + link-local + CGNAT + unique-local v6. */
 function isPrivateAddress(ip: string): boolean {
   if (isIP(ip) === 6) {
@@ -28,7 +40,13 @@ export class BlockedTargetError extends Error {}
  */
 export async function safeFetch(
   url: string,
-  opts: { timeoutMs?: number; maxRedirects?: number; accept?: string } = {},
+  opts: {
+    timeoutMs?: number;
+    maxRedirects?: number;
+    accept?: string;
+    /** Extra request headers. Used to pin a storefront to the brand's own market. */
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<{ res: Response; body: string; finalUrl: string }> {
   const timeoutMs = opts.timeoutMs ?? 12_000;
   let target = url;
@@ -55,7 +73,7 @@ export async function safeFetch(
       res = await fetch(target, {
         redirect: 'manual',
         signal: ctrl.signal,
-        headers: { 'User-Agent': UA, Accept: opts.accept ?? '*/*' },
+        headers: { ...BASE_HEADERS, Accept: opts.accept ?? '*/*', ...(opts.headers ?? {}) },
       });
     } finally {
       clearTimeout(timer);

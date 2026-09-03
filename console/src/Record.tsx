@@ -79,7 +79,7 @@ export function Record({
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Met her at the Napa tasting — buys Cabernet for the office, spends around $60 a bottle."
+          placeholder={`What a rep knows about this customer — how they shop ${brand.name}, their budget, the occasion, anything they mentioned in person.`}
           aria-label="Rep's note about this customer"
         />
         <button onClick={submitNote} disabled={busy || !note.trim()}>

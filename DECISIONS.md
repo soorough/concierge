@@ -281,6 +281,28 @@ inside denials. A suite that punishes an agent for naming what it refuses is mea
 vocabulary, not safety — and one that scores an invented policy as clean is worse than no
 suite, because it manufactures confidence.
 
+## 21. A storefront's prices are not a fact about the brand
+
+Ingesting Wolf Tooth Components from India returned INR. The same part reads `"14.95"` to
+one caller and `"1500.00"` to another, and we stored the second figure under a hardcoded
+USD label. The agent quoted a $54.95 dropper lever as **$5,400** — and every rail passed,
+because the price genuinely was resolved from the database. Grounding is only as good as
+what was ingested.
+
+Node's `fetch` sends `accept-language: *` by default, which Shopify reads as an invitation
+to geolocate. An empty `Accept-Language` suppresses that and returns the shop's own market:
+verified as USD on every attempt, where `*`, `en` and `en-US` all returned INR.
+
+That trick makes the right thing likely. Validation makes the wrong thing impossible:
+`/meta.json` reports the shop's canonical currency, the response's `cart_currency` cookie
+reports what was actually served, and a mismatch aborts the ingest rather than storing
+figures nobody can trust. Currency is now read from the brand and rendered through
+`Intl.NumberFormat` everywhere, instead of a hardcoded dollar sign.
+
+The wider lesson is about where the demo would have failed. Every rail in the build checks
+the model. Nothing was checking the *ingest*, and a bad ingest produces confident, rail-clean,
+hundred-fold-wrong answers.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

@@ -10,6 +10,40 @@ type ShopifyProduct = {
   images: { src: string }[];
 };
 
+/**
+ * A Shopify storefront prices in the *viewer's* market, not the brand's.
+ *
+ * Ingesting Wolf Tooth from India returned INR — "1500.00" where the brand's own price is
+ * $14.95 — and we stored those figures under a hardcoded USD label. The agent would have
+ * quoted a $15 part as $1,500.
+ *
+ * `/meta.json` reports the shop's canonical currency, and the response's `cart_currency`
+ * cookie reports what was actually served. Both are checked, because requesting a market
+ * does not reliably get you one.
+ */
+async function shopCurrency(domain: string): Promise<{ currency: string; country: string | null }> {
+  try {
+    const { res, body } = await safeFetch(`https://${domain}/meta.json`, {
+      timeoutMs: 8000,
+      accept: 'application/json',
+    });
+    if (res.ok) {
+      const meta = JSON.parse(body) as { currency?: string; country?: string };
+      if (meta.currency) return { currency: meta.currency, country: meta.country ?? null };
+    }
+  } catch {
+    /* fall through to the default below */
+  }
+  return { currency: 'USD', country: null };
+}
+
+function servedCurrency(res: Response): string | null {
+  const cookie = res.headers.get('set-cookie') ?? '';
+  return cookie.match(/cart_currency=([A-Z]{3})/)?.[1] ?? null;
+}
+
+export class CurrencyMismatchError extends Error {}
+
 const POLICY_PATHS: { path: string; kind: PackPolicy['kind'] }[] = [
   { path: '/policies/shipping-policy', kind: 'shipping' },
   { path: '/policies/refund-policy', kind: 'returns' },
@@ -18,14 +52,29 @@ const POLICY_PATHS: { path: string; kind: PackPolicy['kind'] }[] = [
   { path: '/pages/about', kind: 'about' },
 ];
 
-async function fetchAllProducts(domain: string, onProgress: OnProgress): Promise<ShopifyProduct[]> {
+async function fetchAllProducts(
+  domain: string,
+  currency: string,
+  onProgress: OnProgress,
+): Promise<ShopifyProduct[]> {
   const out: ShopifyProduct[] = [];
   for (let page = 1; page <= 20; page++) {
     const { res, body } = await safeFetch(
       `https://${domain}/products.json?limit=250&page=${page}`,
-      { timeoutMs: 20_000, accept: 'application/json' },
+      {
+        timeoutMs: 20_000,
+        accept: 'application/json',
+      },
     );
     if (!res.ok) break;
+
+    const served = servedCurrency(res);
+    if (served && served !== currency) {
+      throw new CurrencyMismatchError(
+        `${domain} served prices in ${served} but the shop's currency is ${currency}. ` +
+          `Ingesting would store the wrong figures, so it was stopped.`,
+      );
+    }
     const parsed = JSON.parse(body) as { products: ShopifyProduct[] };
     if (!parsed.products?.length) break;
     out.push(...parsed.products);
@@ -88,8 +137,16 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
   const meta = await fetchBrandMeta(domain);
   if (meta.smsVendor) onProgress({ type: 'stage', stage: 'vendor', detail: meta.smsVendor });
 
+  onProgress({ type: 'stage', stage: 'currency', detail: 'reading the shop\'s own currency' });
+  const { currency, country } = await shopCurrency(domain);
+  onProgress({
+    type: 'stage',
+    stage: 'currency',
+    detail: `${currency}${country ? ` (${country})` : ''}`,
+  });
+
   onProgress({ type: 'stage', stage: 'products', detail: 'paginating products.json' });
-  const raw = await fetchAllProducts(domain, onProgress);
+  const raw = await fetchAllProducts(domain, currency, onProgress);
   onProgress({ type: 'count', label: 'products found', value: raw.length });
 
   onProgress({ type: 'stage', stage: 'policies', detail: 'shipping, returns, terms, faq' });
@@ -103,7 +160,7 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
       variantId: v ? String(v.id) : null,
       title: p.title,
       priceCents: Math.round(parseFloat(v?.price ?? '0') * 100),
-      currency: 'USD',
+      currency,
       available: (p.variants ?? []).some((x) => x.available),
       productType: p.product_type || null,
       tags: p.tags ?? [],
@@ -128,7 +185,7 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
     brand: {
       name: meta.name ?? domain,
       domain,
-      currency: 'USD',
+      currency,
       logoUrl: meta.logoUrl,
       palette: meta.palette,
       category,

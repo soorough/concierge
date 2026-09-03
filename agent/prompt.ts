@@ -1,7 +1,13 @@
 import type { Retrieval } from './retrieve.js';
 import type { StoredBrand } from '../store/queries.js';
 
-const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+const money = (cents: number, currency = 'USD') => {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
+  } catch {
+    return `${currency} ${(cents / 100).toFixed(2)}`;
+  }
+};
 
 export type SystemBlocks = {
   /** Byte-identical for every turn of a brand, so it can be cached. */
@@ -168,6 +174,6 @@ Reply with a single JSON object and nothing else:
   return { stable, volatile };
 }
 
-export function formatPriceForConsole(cents: number): string {
-  return money(cents);
+export function formatPriceForConsole(cents: number, currency = 'USD'): string {
+  return money(cents, currency);
 }
