@@ -1,14 +1,15 @@
+import { loadEnv } from './env.js';
+
+loadEnv();
+
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { migrate, getDb } from '../store/db.js';
 import { registerIngestRoutes } from './routes/ingest.js';
 import { registerThreadRoutes } from './routes/thread.js';
 import { registerGate } from './gate.js';
-
-const here = dirname(fileURLToPath(import.meta.url));
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 
@@ -22,7 +23,9 @@ app.get('/api/health', async () => ({ ok: true, at: Date.now() }));
 
 // Single origin: the API and the built console are served by the same process, so there
 // is no CORS surface and SSE has no cross-origin quirks.
-const consoleDist = join(here, '..', '..', 'console', 'dist');
+// Resolved from the project root so it is correct both under tsx (server/) and from a
+// build (dist/server/).
+const consoleDist = join(process.cwd(), 'console', 'dist');
 if (existsSync(consoleDist)) {
   await app.register(fastifyStatic, { root: consoleDist });
   app.setNotFoundHandler((req, reply) => {

@@ -49,11 +49,26 @@ export function retrieve(opts: {
   const { brandId, customerId, message } = opts;
   const limit = opts.limit ?? 12;
 
+  const history = recentTurns(customerId, 8);
+
+  /*
+   * Retrieval keys off the conversation, not just the latest message. "add one bottle and
+   * check me out" carries no product terms, so querying it alone returns a catalog slice
+   * without the wine under discussion — and the no-invented-SKU rule then makes the agent
+   * confidently deny carrying something it sells. The last few customer messages are
+   * folded into the query so the subject of the conversation survives a follow-up.
+   */
+  const recentCustomerText = history
+    .filter((t) => t.direction === 'in' && t.text)
+    .slice(-3)
+    .map((t) => t.text!)
+    .join(' ');
+
   const sellableCount = (
     db.prepare('select count(*) c from product where brand_id = ? and sellable = 1').get(brandId) as { c: number }
   ).c;
 
-  const query = toFtsQuery(message);
+  const query = toFtsQuery(`${message} ${recentCustomerText}`);
   let products: RetrievedProduct[];
 
   if (sellableCount <= SMALL_CATALOG) {
@@ -105,7 +120,7 @@ export function retrieve(opts: {
     products,
     policies,
     facts: currentFacts(customerId),
-    history: recentTurns(customerId, 8),
+    history,
     cartProducts,
   };
 }

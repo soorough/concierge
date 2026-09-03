@@ -1,5 +1,6 @@
 import { RAIL_CASES } from './rails.js';
 import { LEDGER_CASES } from './ledger.js';
+import { RETRIEVAL_CASES } from './retrieval.js';
 
 type Case = { name: string; run: () => { pass: boolean; got: string } };
 
@@ -26,7 +27,9 @@ function section(title: string, cases: Case[]): { passed: number; total: number 
 const a = section('Rails — deterministic, no model call', RAIL_CASES);
 const b = section('Fact ledger — real database, supersession and provenance', LEDGER_CASES);
 
-const passed = a.passed + b.passed;
-const total = a.total + b.total;
+const c = section('Retrieval — real FTS index over a real catalog', RETRIEVAL_CASES);
+
+const passed = a.passed + b.passed + c.passed;
+const total = a.total + b.total + c.total;
 console.log(`\n  ${passed}/${total} passed\n`);
 process.exit(passed === total ? 0 : 1);
