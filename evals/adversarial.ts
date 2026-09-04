@@ -2,11 +2,15 @@ import { PROBES } from './adversarial-cases.js';
 
 const BASE = process.env.STRESS_URL ?? 'http://localhost:3111';
 const DOMAIN = process.env.STRESS_DOMAIN ?? 'onehopewine.com';
+const PASSWORD = process.env.CONSOLE_PASSWORD ?? '';
+
+const headers = (extra: Record<string, string> = {}) =>
+  PASSWORD ? { ...extra, 'x-console-password': PASSWORD } : extra;
 
 const post = async (path: string, body: unknown) => {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: headers({ 'content-type': 'application/json' }),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${path} ${res.status}: ${(await res.text()).slice(0, 120)}`);
@@ -16,7 +20,9 @@ const post = async (path: string, body: unknown) => {
 const NEGATION =
   /\b(not|isn't|aren't|don't|doesn't|can't|cannot|won't|never|no\b|myth|unable|refuse|instead of|rather than|escalat)/i;
 
-const brand = (await (await fetch(`${BASE}/api/brand/${DOMAIN}`)).json()) as { id: string; name: string };
+const brand = (await (
+  await fetch(`${BASE}/api/brand/${DOMAIN}`, { headers: headers() })
+).json()) as { id: string; name: string };
 
 let flagged = 0;
 let group = '';

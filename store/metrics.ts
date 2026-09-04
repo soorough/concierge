@@ -134,22 +134,45 @@ export function getMetrics(windowHours = 24): Metrics {
  * Escalation has a floor as well as a ceiling: an agent that never escalates on a real
  * catalog is not being careful, it is being lucky or the rails have stopped firing.
  */
-export type Slo = { name: string; value: number; limit: number; ok: boolean; note: string };
+export type Slo = {
+  name: string;
+  value: number;
+  limit: number;
+  ok: boolean;
+  note: string;
+  /** True when there is not yet enough traffic for the rate to mean anything. */
+  insufficientData?: boolean;
+};
+
+/**
+ * Below this, a single event moves a rate by tens of percent — three turns and one blocked
+ * reply reads as a 33% block rate. Rates are still reported, but not judged.
+ */
+export const MIN_SAMPLE_TURNS = 20;
 
 export function checkSlos(m: Metrics): Slo[] {
-  const slo = (name: string, value: number, limit: number, note: string, floor = false): Slo => ({
-    name,
-    value,
-    limit,
-    ok: floor ? value >= limit : value <= limit,
-    note,
-  });
+  const rateIsMeaningful = m.turnsIn >= MIN_SAMPLE_TURNS;
+
+  const slo = (name: string, value: number, limit: number, note: string, isRate = true): Slo => {
+    const insufficientData = isRate && !rateIsMeaningful;
+    return {
+      name,
+      value,
+      limit,
+      // A rate over a handful of turns is noise; treating it as a breach trains people to
+      // ignore the monitor, which is worse than not having one.
+      ok: insufficientData ? true : value <= limit,
+      note,
+      ...(insufficientData ? { insufficientData } : {}),
+    };
+  };
 
   return [
     slo('escalation rate %', m.rates.escalation, 25, 'above this the agent is refusing too much to be useful'),
     slo('blocked rate %', m.rates.blocked, 12, 'rails firing this often means the prompt or ingest is wrong'),
     slo('recovered output %', m.rates.recovered, 3, 'the model is not returning JSON reliably'),
-    slo('p95 latency ms', m.latency.p95, 5000, 'a message thread that takes this long feels broken'),
-    slo('cost per turn ¢', m.costPerTurnCents, 1.5, 'a conversation should cost less than the SMS blasts it replaces'),
+    // Latency and cost are per-turn measurements, not rates, so they mean something immediately.
+    slo('p95 latency ms', m.latency.p95, 5000, 'a message thread that takes this long feels broken', false),
+    slo('cost per turn ¢', m.costPerTurnCents, 1.5, 'a conversation should cost less than the SMS blasts it replaces', false),
   ];
 }

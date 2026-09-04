@@ -1,5 +1,8 @@
 # Deploying
 
+Currently live at **https://concierge-production-4b32.up.railway.app**, deployed from
+`master` on every push, running in Singapore with a volume mounted at `/data`.
+
 Railway, because the app keeps a SQLite file on disk and that is the reason it is small
 enough to reason about. Everything below assumes the repo at `soorough/concierge`.
 
@@ -23,14 +26,19 @@ services that have never used config-as-code from opting in, and existing files 
 The first build log confirms it: the setup phase installs `nodejs_20, python3, gcc, gnumake`
 from `nixpacks.toml`, and the build and start commands come from `railway.json`.
 
-Two things that broke the first build, both worth knowing:
+Three things learned from the first builds:
 
-- **Do not run `npm ci` in the build command.** Nixpacks already runs it in the install
-  phase, and `npm ci` wipes `node_modules` — which fails against the mounted build cache with
-  `EBUSY: rmdir '/app/node_modules/.cache'`. The build command uses `npm install
-  --include=dev`, which updates in place rather than deleting.
-- **`--include=dev` is not optional.** The builder sets production mode, which omits
-  devDependencies, and `typescript` is one — so `tsc` would not exist at build time.
+- **Do not install twice.** Nixpacks installs in its own phase. A build command that runs
+  `npm ci` again wipes `node_modules` and fails against the mounted cache with
+  `EBUSY: rmdir '/app/node_modules/.cache'`; one that runs `npm install` instead re-resolves
+  the tree and rebuilds native modules — with `gcc` present, `better-sqlite3` compiles from
+  source rather than using its prebuilt binary. That single step took **5m 7s**. The install
+  phase now carries `--include=dev` and the build phase only builds.
+- **`--include=dev` is not optional.** The builder runs in production mode and omits
+  devDependencies; `typescript` is one, so `tsc` would not exist at build time.
+- **Prune before the image is exported.** `build:deploy` removes the console's dependency
+  tree and prunes dev dependencies once the build has produced `dist/` and `console/dist/`.
+  Nothing the server needs at runtime is a devDependency, and image size is push time.
 
 | Setting | Value | Why |
 |---|---|---|
@@ -81,17 +89,17 @@ on every push.
 
 ## Build time
 
-Compilation is not the cost. Measured on this repo: `tsc` plus copying the SQL is 1.6s, the
-console's Vite build is 1.7s, and `better-sqlite3` installs a prebuilt binary in ~27s rather
-than compiling. A six-minute build is roughly five seconds of this project and five and a
-half minutes of platform: builder scheduling, the Nix image, dependency installation, layer
-export and the deploy itself.
+Compilation is not the cost. Measured on this repo: `tsc` plus copying the SQL is 1.6s and
+the console's Vite build is 1.7s. `better-sqlite3` installs a prebuilt binary in about 27s
+rather than compiling — unless something forces a rebuild, which is exactly what the
+duplicate install pass did.
+
+From a real build log: `npm ci` 45s, the duplicate install-and-build step **5m 7s**, image
+export 13s, and a 476 MB image to push. Removing the duplicate pass and pruning the image is
+where the time was.
 
 What is worth controlling:
 
-- **One install pass, not two.** Nixpacks installs in its own phase; a build command that
-  runs `npm ci` again repeats the whole tree and, worse, fails against the mounted cache.
-  The install phase is configured with `--include=dev` so the build phase only builds.
 - **Read the per-step durations in the build log.** They are printed against each step. If
   `npm ci` is the long pole, the registry is the bottleneck; if the Nix `RUN` is, the setup
   image is; if neither, it is layer export and deploy, which this repo does not control.
@@ -112,8 +120,14 @@ server serves the API and the built console from one origin, so there is no CORS
 
 ```sh
 curl https://<your-app>.up.railway.app/api/health
-MONITOR_URL=https://<your-app>.up.railway.app npm run monitor
+
+MONITOR_URL=https://<your-app>.up.railway.app \
+CONSOLE_PASSWORD=<the password> npm run monitor
 ```
+
+The monitor and the stress suite both send the console password; without it they only report
+that they cannot see anything. Rates are not judged below twenty turns in the window — one
+blocked reply out of three is a 33% block rate and means nothing.
 
 `npm run monitor` exits non-zero when a service level is breached, so it is worth putting on
 a schedule rather than remembering to run it.

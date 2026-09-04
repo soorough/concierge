@@ -9,10 +9,22 @@ export {};
 
 const BASE = process.env.MONITOR_URL ?? 'http://localhost:3111';
 const HOURS = Number(process.env.MONITOR_HOURS ?? 24);
+// A deployed console is password-gated, so a monitor without the password only ever
+// reports that it cannot see anything.
+const PASSWORD = process.env.CONSOLE_PASSWORD ?? '';
 
-type Slo = { name: string; value: number; limit: number; ok: boolean; note: string };
+type Slo = {
+  name: string; value: number; limit: number; ok: boolean; note: string;
+  insufficientData?: boolean;
+};
 
-const res = await fetch(`${BASE}/api/metrics?hours=${HOURS}`);
+const res = await fetch(`${BASE}/api/metrics?hours=${HOURS}`, {
+  headers: PASSWORD ? { 'x-console-password': PASSWORD } : {},
+});
+if (res.status === 401) {
+  console.error(`monitor: ${BASE} needs CONSOLE_PASSWORD in the environment`);
+  process.exit(2);
+}
 if (!res.ok) {
   console.error(`monitor: ${BASE} returned ${res.status}`);
   process.exit(2);
@@ -63,9 +75,10 @@ console.log(`\n  ${dim('service levels')}`);
 let breached = 0;
 for (const s of m.slos) {
   if (!s.ok) breached++;
-  const mark = s.ok ? green('ok  ') : red('BREACH');
+  const mark = s.insufficientData ? dim('n/a ') : s.ok ? green('ok  ') : red('BREACH');
   console.log(`    ${mark} ${s.name.padEnd(22)} ${String(s.value).padStart(8)}  limit ${s.limit}`);
-  if (!s.ok) console.log(`         ${dim(s.note)}`);
+  if (s.insufficientData) console.log(`         ${dim('too little traffic to judge this rate yet')}`);
+  else if (!s.ok) console.log(`         ${dim(s.note)}`);
 }
 
 if (m.turnsIn === 0) {
