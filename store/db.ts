@@ -78,10 +78,46 @@ export function getDb(): DB {
   return db;
 }
 
-/** Idempotent. Schema first, then the FTS5 sync triggers. */
+/**
+ * Columns added after the first deployment.
+ *
+ * `CREATE TABLE IF NOT EXISTS` creates a table or does nothing; it never adds a column to
+ * one that already exists. Every schema change since the first deploy therefore applied
+ * cleanly to a fresh database and silently not at all to the live one — which is how
+ * production ended up without `mcp_tools_json` while reporting a successful ingest.
+ *
+ * Additive only, and applied when absent, so running this against any database of any age
+ * converges on the current schema.
+ */
+const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: 'brand', column: 'offers_json', ddl: 'TEXT' },
+  { table: 'brand', column: 'mcp_tools_json', ddl: 'TEXT' },
+  { table: 'cart', column: 'remote_cart_id', ddl: 'TEXT' },
+  { table: 'cart', column: 'remote_total_cents', ddl: 'INTEGER' },
+  { table: 'cart', column: 'remote_discounts_json', ddl: 'TEXT' },
+  { table: 'cart', column: 'remote_signature', ddl: 'TEXT' },
+];
+
+function applyAddedColumns(d: DB): string[] {
+  const applied: string[] = [];
+  for (const { table, column, ddl } of ADDED_COLUMNS) {
+    const exists = (d.prepare(`select count(*) c from pragma_table_info(?) where name = ?`).get(
+      table,
+      column,
+    ) as { c: number }).c;
+    if (exists) continue;
+    d.exec(`alter table ${table} add column ${column} ${ddl}`);
+    applied.push(`${table}.${column}`);
+  }
+  return applied;
+}
+
+/** Idempotent. Schema, then columns added since, then the FTS5 sync triggers. */
 export function migrate(target?: DB): DB {
   const d = target ?? getDb();
   d.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
+  const added = applyAddedColumns(d);
+  if (added.length) console.log(`migrate: added ${added.join(', ')}`);
   d.exec(readFileSync(join(here, 'triggers.sql'), 'utf8'));
   return d;
 }
