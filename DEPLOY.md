@@ -79,7 +79,7 @@ on every push.
 | Variable | Value | Why |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | your key | The turn path |
-| `DB_PATH` | `/data/concierge.db` | Must point inside the mounted volume |
+| `DB_PATH` | `/data/concierge.db` | **Absolute.** `.env.example` carries `./data/concierge.db` for local development; copying that value into the deployment writes the database inside the container, where the next deploy erases it |
 | `CONSOLE_PASSWORD` | something long | Without it the API is open, and it spends your credits |
 | `PORT` | leave unset | Railway injects it |
 | `DAILY_SPEND_CAP_CENTS` | `500` | Ceiling for the whole deployment, per UTC day |
