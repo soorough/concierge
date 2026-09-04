@@ -49,6 +49,7 @@ Three things learned from the first builds:
 | Replicas | **1** | SQLite on one volume. A second replica is a second database and a split brain |
 | Serverless / scale to zero | **off** | A cold start reloads a native module and loses the prompt cache; the first message after a sleep is slow and expensive |
 | Volume | **mount at `/data`** | Without it the database is wiped on every deploy and every ingested brand disappears |
+| `DB_PATH` | **`/data/concierge.db`** | Mounting the volume is not enough. If `DB_PATH` is unset the database is written inside the container and erased anyway |
 | Region | note it | The storefront prices in the *server's* market — see below |
 
 ### The region matters more than it looks
@@ -115,6 +116,20 @@ npx @railway/cli up          # or just push to the connected branch
 The build runs `tsc`, copies `store/*.sql` into `dist` — TypeScript does not emit them, and
 forgetting this fails at first boot with `ENOENT: schema.sql` — and builds the console. The
 server serves the API and the built console from one origin, so there is no CORS surface.
+
+## Checking that storage actually persists
+
+Mounting a volume and pointing the database at it are two separate things, and getting the
+second one wrong looks completely healthy — until a deploy quietly takes every ingested brand
+and every conversation with it. That happened on the first deploy here.
+
+```sh
+curl https://<your-app>.up.railway.app/api/health
+```
+
+`storage.persistent` must be `true`. If it is `false` the response says where the database
+actually is, the server logs a warning at boot, and the console shows a `NOT PERSISTENT` row
+in the operator column. Set `DB_PATH` and redeploy.
 
 ## After deploying
 

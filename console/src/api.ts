@@ -96,7 +96,13 @@ export type Metrics = {
   slos: Slo[];
 };
 
+export type Health = {
+  ok: boolean;
+  storage: { path: string; persistent: boolean; warning?: string };
+};
+
 export const api = {
+  health: (): Promise<Health> => get('/api/health'),
   metrics: (hours = 24): Promise<Metrics> => get(`/api/metrics?hours=${hours}`),
   brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
     get('/api/brands'),

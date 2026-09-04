@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, clock, type Brand, type Fact, type Metrics, type ThreadTurn } from './api';
+import { api, clock, type Brand, type Fact, type Health, type Metrics, type ThreadTurn } from './api';
 
 /**
  * The operator's side: what the machine did, and why it is allowed to have said it.
@@ -17,13 +17,17 @@ export function Record({
 }) {
   const [note, setNote] = useState('');
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [health, setHealth] = useState<Health | null>(null);
   const [busy, setBusy] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
 
   // Health is about the deployment, not this thread, so it refreshes on its own.
   useEffect(() => {
     let live = true;
-    const load = () => api.metrics(24).then((m) => live && setMetrics(m)).catch(() => undefined);
+    const load = () => {
+      api.metrics(24).then((m) => live && setMetrics(m)).catch(() => undefined);
+      api.health().then((h) => live && setHealth(h)).catch(() => undefined);
+    };
     load();
     const timer = setInterval(load, 30_000);
     return () => {
@@ -84,6 +88,23 @@ export function Record({
           {superseded.map((f) => (
             <FactRow key={f.id} fact={f} dead />
           ))}
+        </>
+      )}
+
+      {health && !health.storage.persistent && (
+        <>
+          <p className="eyebrow"><span>Storage</span></p>
+          <div className="row lvl-block">
+            <time>warn</time>
+            <span>
+              <span className="code">NOT PERSISTENT</span>
+              <span className="detail">
+                {' '}
+                {health.storage.path} is inside the working directory and is erased on every
+                deploy. Point DB_PATH at a mounted volume.
+              </span>
+            </span>
+          </div>
         </>
       )}
 
