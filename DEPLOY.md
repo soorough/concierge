@@ -16,6 +16,32 @@ If Vercel ever becomes a requirement, the migration is: swap `better-sqlite3` fo
 `@libsql/client`, make the store layer async, and thread it outward. The schema and every
 query survive unchanged.
 
+## Railway dashboard settings
+
+Config-as-code is deprecated and cannot be enabled on new services, so `railway.json` and
+`nixpacks.toml` in this repo are ignored — the builder is Railpack and these values come
+from the dashboard.
+
+| Setting | Value | Why |
+|---|---|---|
+| Builder | Railpack (default) | Picks up `npm run build` and `npm start` from package.json |
+| Custom Build Command | *leave empty* | The root build compiles the server, copies the SQL, and installs and builds the console |
+| Custom Start Command | `npm start` | Runs the compiled server |
+| Healthcheck Path | `/api/health` | The only route left open when a password is set |
+| Replicas | **1** | SQLite on one volume. A second replica is a second database and a split brain |
+| Serverless / scale to zero | **off** | A cold start reloads a native module and loses the prompt cache; the first message after a sleep is slow and expensive |
+| Volume | **mount at `/data`** | Without it the database is wiped on every deploy and every ingested brand disappears |
+| Region | note it | The storefront prices in the *server's* market — see below |
+
+### The region matters more than it looks
+
+Shopify prices in the market it geolocates the caller to. Deployed in Singapore, a US
+storefront may serve SGD, exactly as it served INR from India during development. Ingest
+suppresses `Accept-Language` to ask for the shop's own market and then validates the served
+currency against `/meta.json`, aborting rather than storing wrong figures. After the first
+deploy, re-ingest a brand and confirm the console shows `USD` — a currency mismatch shows up
+as a refused ingest, not as silently wrong prices.
+
 ## What you have to do yourself
 
 These need your credentials, so they are yours to run, not mine:

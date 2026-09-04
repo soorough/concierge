@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch server/index.ts",
-    "build": "tsc -p tsconfig.json && cp store/*.sql dist/store/ && npm --prefix console run build",
+    "build": "tsc -p tsconfig.json && cp store/*.sql dist/store/ && npm --prefix console ci && npm --prefix console run build",
     "start": "node dist/server/index.js",
     "evals": "tsx evals/run.ts",
     "stress": "tsx evals/adversarial.ts",

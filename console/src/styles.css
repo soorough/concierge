@@ -495,3 +495,23 @@ input, textarea { font: inherit; color: inherit; }
   .col + .col { border-left: none; border-top: 1px solid var(--rule); }
   .phone { height: 620px; }
 }
+
+/* ── password gate ───────────────────────────────────────────────────── */
+
+.lock {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--paper-2);
+  padding: 24px;
+}
+
+.lock__box {
+  width: min(420px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  padding: 22px 20px 20px;
+}
+
+.lock__box .empty { padding-bottom: 14px; line-height: 1.55; }
+.lock__box .field { margin-bottom: 0; }

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, sessionId as getSessionId, money, type Brand, type Cart, type Fact, type ThreadTurn } from './api';
+import {
+  api,
+  sessionId as getSessionId,
+  getPassword,
+  setPassword,
+  UnauthorisedError,
+  type Brand,
+  type Cart,
+  type Fact,
+  type ThreadTurn,
+} from './api';
 import { Phone } from './Phone';
 import { Ingest } from './Ingest';
 import { Record } from './Record';
@@ -23,6 +33,7 @@ export function App() {
   const [needsAge, setNeedsAge] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
 
   const loadBrand = useCallback(async (domain: string) => {
     const b = await api.brand(domain);
@@ -52,10 +63,14 @@ export function App() {
   useEffect(() => {
     api.brands()
       .then((list) => {
+        setLocked(false);
         setBrands(list);
         return list.length ? loadBrand(list[0].domain) : undefined;
       })
-      .catch(() => undefined);
+      .catch((e) => {
+        // A deployed console is password-gated; an unlocked one simply never sees this.
+        if (e instanceof UnauthorisedError) setLocked(true);
+      });
   }, [loadBrand]);
 
   useEffect(() => {
@@ -110,6 +125,8 @@ export function App() {
       p50: lat.length ? lat[Math.floor(lat.length / 2)] : 0,
     };
   }, [turns]);
+
+  if (locked) return <Lock onUnlocked={() => window.location.reload()} />;
 
   return (
     <div className="shell">
@@ -184,6 +201,44 @@ export function App() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The whole console is behind one shared password, so the gate is one field rather than a
+ * sign-in flow. Deliberately says what it is: an internal tool, not a product login.
+ */
+function Lock({ onUnlocked }: { onUnlocked: () => void }) {
+  const [value, setValue] = useState(getPassword());
+
+  return (
+    <div className="lock">
+      <form
+        className="lock__box"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPassword(value.trim());
+          onUnlocked();
+        }}
+      >
+        <p className="eyebrow"><span>Concierge</span></p>
+        <p className="empty">
+          This console is shared with the team and spends model credits, so it is behind a
+          password.
+        </p>
+        <div className="field">
+          <input
+            type="password"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Console password"
+            aria-label="Console password"
+            autoFocus
+          />
+          <button type="submit">Unlock</button>
+        </div>
+      </form>
     </div>
   );
 }

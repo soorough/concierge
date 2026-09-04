@@ -38,13 +38,49 @@ export type ThreadTurn = {
   rails: { level: string; code: string; detail: string | null }[];
 };
 
+const PASSWORD_KEY = 'concierge.password';
+
+export class UnauthorisedError extends Error {}
+
+export const getPassword = (): string => {
+  try {
+    return localStorage.getItem(PASSWORD_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
+
+export const setPassword = (value: string): void => {
+  try {
+    localStorage.setItem(PASSWORD_KEY, value);
+  } catch {
+    /* a viewer with storage blocked simply re-enters it */
+  }
+};
+
+/**
+ * The deployed API is gated by a shared password. Sending it on every request keeps the
+ * console usable without a session endpoint; the header is the same one `gate.ts` checks.
+ */
+export const authHeaders = (extra: Record<string, string> = {}): Record<string, string> => {
+  const password = getPassword();
+  return password ? { ...extra, 'x-console-password': password } : extra;
+};
+
 const json = async (r: Response) => {
+  if (r.status === 401) throw new UnauthorisedError('This console needs its password.');
   if (!r.ok) throw new Error((await r.json().catch(() => ({ error: r.statusText }))).error ?? r.statusText);
   return r.json();
 };
 
+const get = (url: string) => fetch(url, { headers: authHeaders() }).then(json);
+
 const post = (url: string, body: unknown) =>
-  fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(json);
+  fetch(url, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(body),
+  }).then(json);
 
 export type Slo = { name: string; value: number; limit: number; ok: boolean; note: string };
 
@@ -61,19 +97,19 @@ export type Metrics = {
 };
 
 export const api = {
-  metrics: (hours = 24): Promise<Metrics> => fetch(`/api/metrics?hours=${hours}`).then(json),
+  metrics: (hours = 24): Promise<Metrics> => get(`/api/metrics?hours=${hours}`),
   brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
-    fetch('/api/brands').then(json),
-  brand: (domain: string): Promise<Brand> => fetch(`/api/brand/${domain}`).then(json),
+    get('/api/brands'),
+  brand: (domain: string): Promise<Brand> => get(`/api/brand/${domain}`),
   preflight: (domain: string) => post('/api/preflight', { domain }),
   turn: (brandId: string, sessionId: string, text: string): Promise<TurnResult> =>
     post('/api/turn', { brandId, sessionId, text }),
   thread: (brandId: string, sessionId: string): Promise<{ turns: ThreadTurn[] }> =>
-    fetch(`/api/thread?brandId=${brandId}&sessionId=${sessionId}`).then(json),
+    get(`/api/thread?brandId=${brandId}&sessionId=${sessionId}`),
   facts: (brandId: string, sessionId: string): Promise<{ current: Fact[]; all: Fact[] }> =>
-    fetch(`/api/facts?brandId=${brandId}&sessionId=${sessionId}`).then(json),
+    get(`/api/facts?brandId=${brandId}&sessionId=${sessionId}`),
   cart: (brandId: string, sessionId: string): Promise<Cart> =>
-    fetch(`/api/cart?brandId=${brandId}&sessionId=${sessionId}`).then(json),
+    get(`/api/cart?brandId=${brandId}&sessionId=${sessionId}`),
   setQty: (brandId: string, sessionId: string, productId: string, qty: number): Promise<Cart> =>
     post('/api/cart/qty', { brandId, sessionId, productId, qty }),
   clearCart: (brandId: string, sessionId: string): Promise<Cart> =>
@@ -92,9 +128,10 @@ export async function ingestStream(
 ): Promise<void> {
   const res = await fetch('/api/ingest', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: authHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ domain, force }),
   });
+  if (res.status === 401) throw new UnauthorisedError('This console needs its password.');
   const reader = res.body?.getReader();
   if (!reader) throw new Error('no stream');
   const decoder = new TextDecoder();
