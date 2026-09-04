@@ -94,8 +94,7 @@ What is worth controlling:
   The install phase is configured with `--include=dev` so the build phase only builds.
 - **Read the per-step durations in the build log.** They are printed against each step. If
   `npm ci` is the long pole, the registry is the bottleneck; if the Nix `RUN` is, the setup
-  image is; if neither, it is layer export and deploy, which is not something this repo can
-  改善 and simply is what it is on a first build.
+  image is; if neither, it is layer export and deploy, which this repo does not control.
 - **Later builds are faster** because layers cache — but any change to tracked files
   invalidates from the `COPY` onward, so most real deploys will reinstall dependencies.
 
