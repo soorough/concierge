@@ -81,9 +81,23 @@ on every push.
 
 ## Build time
 
-Expect roughly 4–5 minutes for a cold build: `better-sqlite3` is a native module and is
-compiled from source, which took 3m27s from a clean clone locally. Subsequent deploys reuse
-the cache and are much faster.
+Compilation is not the cost. Measured on this repo: `tsc` plus copying the SQL is 1.6s, the
+console's Vite build is 1.7s, and `better-sqlite3` installs a prebuilt binary in ~27s rather
+than compiling. A six-minute build is roughly five seconds of this project and five and a
+half minutes of platform: builder scheduling, the Nix image, dependency installation, layer
+export and the deploy itself.
+
+What is worth controlling:
+
+- **One install pass, not two.** Nixpacks installs in its own phase; a build command that
+  runs `npm ci` again repeats the whole tree and, worse, fails against the mounted cache.
+  The install phase is configured with `--include=dev` so the build phase only builds.
+- **Read the per-step durations in the build log.** They are printed against each step. If
+  `npm ci` is the long pole, the registry is the bottleneck; if the Nix `RUN` is, the setup
+  image is; if neither, it is layer export and deploy, which is not something this repo can
+  改善 and simply is what it is on a first build.
+- **Later builds are faster** because layers cache — but any change to tracked files
+  invalidates from the `COPY` onward, so most real deploys will reinstall dependencies.
 
 ## Deploy
 
