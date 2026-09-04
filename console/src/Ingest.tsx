@@ -19,8 +19,14 @@ export function Ingest({ brand, onIngested }: { brand: Brand | null; onIngested:
     setLog([]);
     setVerdict(null);
     try {
-      const pre = (await api.preflight(domain)) as { path: string; detail: string; ms: number };
+      const pre = (await api.preflight(domain)) as {
+        path: string;
+        detail: string;
+        ms: number;
+        domain: string;
+      };
       setVerdict(pre);
+      if (pre.domain) setDomain(pre.domain);
       if (pre.path === 'blocked') {
         setLog([{ k: 'stopped', v: 'ingest needs their cooperation or an API key', cls: 'errline' }]);
         return;
@@ -30,7 +36,14 @@ export function Ingest({ brand, onIngested }: { brand: Brand | null; onIngested:
         else if (e.type === 'count') setLog((l) => [...l, { k: String(e.label), v: String(e.value) }]);
         else if (e.type === 'warn') setLog((l) => [...l, { k: 'missing', v: String(e.message).replace(/^not found: /, ''), cls: 'warnline' }]);
         else if (e.type === 'error') setLog((l) => [...l, { k: 'error', v: String(e.message), cls: 'errline' }]);
-        else if (e.type === 'result') onIngested(domain);
+        // The server normalises what was typed — "https://brand.com/" becomes "brand.com".
+        // Handing back the raw input produced /api/brand/https://brand.com/, which 404s and
+        // left the console with no brand and no thread after a successful ingest.
+        else if (e.type === 'result') {
+          const ingested = (e.result as { domain?: string } | undefined)?.domain ?? domain;
+          setDomain(ingested);
+          onIngested(ingested);
+        }
       });
     } catch (err) {
       setLog((l) => [...l, { k: 'error', v: (err as Error).message, cls: 'errline' }]);

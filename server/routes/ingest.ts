@@ -42,7 +42,12 @@ export async function registerIngestRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Params: { domain: string } }>('/api/brand/:domain', async (req, reply) => {
-    const brand = getBrandByDomain(normaliseDomain(req.params.domain));
+    let brand;
+    try {
+      brand = getBrandByDomain(normaliseDomain(decodeURIComponent(req.params.domain)));
+    } catch {
+      return reply.code(400).send({ error: `not a valid domain: ${req.params.domain}` });
+    }
     if (!brand) return reply.code(404).send({ error: 'not ingested' });
     const db = getDb();
     const counts = db

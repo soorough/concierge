@@ -106,7 +106,7 @@ export const api = {
   metrics: (hours = 24): Promise<Metrics> => get(`/api/metrics?hours=${hours}`),
   brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
     get('/api/brands'),
-  brand: (domain: string): Promise<Brand> => get(`/api/brand/${domain}`),
+  brand: (domain: string): Promise<Brand> => get(`/api/brand/${encodeURIComponent(domain)}`),
   preflight: (domain: string) => post('/api/preflight', { domain }),
   turn: (brandId: string, sessionId: string, text: string): Promise<TurnResult> =>
     post('/api/turn', { brandId, sessionId, text }),
