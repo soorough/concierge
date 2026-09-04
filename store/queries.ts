@@ -8,6 +8,7 @@ export type StoredBrand = {
   ingest_path: string; detected_sms_vendor: string | null;
   free_ship_threshold: number | null; restricted_regions_json: string | null;
   offers_json: string | null;
+  mcp_tools_json: string | null;
   products_total: number; products_excluded: number; missing_json: string | null;
   ingested_at: number;
 };
@@ -37,10 +38,10 @@ export function saveContextPack(pack: ContextPack): { brandId: string; total: nu
     db.prepare(`
       insert into brand (id, domain, name, currency, logo_url, palette_json, category,
                          ingest_path, detected_sms_vendor, free_ship_threshold,
-                         restricted_regions_json, offers_json, products_total, products_excluded,
-                         missing_json, ingested_at)
+                         restricted_regions_json, offers_json, mcp_tools_json, products_total,
+                         products_excluded, missing_json, ingested_at)
       values (@id,@domain,@name,@currency,@logo_url,@palette_json,@category,@ingest_path,
-              @vendor,@threshold,@regions,@offers,@total,@excluded,@missing,@at)
+              @vendor,@threshold,@regions,@offers,@mcp,@total,@excluded,@missing,@at)
       on conflict(domain) do update set
         name=excluded.name, currency=excluded.currency, logo_url=excluded.logo_url,
         palette_json=excluded.palette_json, category=excluded.category,
@@ -48,6 +49,7 @@ export function saveContextPack(pack: ContextPack): { brandId: string; total: nu
         free_ship_threshold=excluded.free_ship_threshold,
         restricted_regions_json=excluded.restricted_regions_json,
         offers_json=excluded.offers_json,
+        mcp_tools_json=excluded.mcp_tools_json,
         products_total=excluded.products_total, products_excluded=excluded.products_excluded,
         missing_json=excluded.missing_json, ingested_at=excluded.ingested_at
     `).run({
@@ -58,6 +60,7 @@ export function saveContextPack(pack: ContextPack): { brandId: string; total: nu
       threshold: pack.freeShipThreshold ?? null,
       regions: JSON.stringify(pack.restrictedRegions),
       offers: JSON.stringify(pack.offers),
+      mcp: JSON.stringify(pack.brand.mcpTools ?? []),
       total: counts.total, excluded: 0,
       missing: JSON.stringify(pack.missing), at: Date.now(),
     });

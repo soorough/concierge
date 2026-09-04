@@ -1,4 +1,5 @@
 import { getDb, id } from '../store/db.js';
+import { priceCartViaMcp } from '../ingest/mcp.js';
 
 export type CartLine = {
   product_id: string; variant_id: string | null; qty: number;
@@ -9,9 +10,15 @@ export type CartLine = {
 export type CartView = {
   cartId: string;
   lines: CartLine[];
+  /** Sum of list prices from the catalog. */
   subtotalCents: number;
+  /** What the store says the customer pays, when it will tell us. */
+  totalCents: number | null;
+  discounts: { title: string; amountCents: number }[];
   currency: string;
   permalink: string | null;
+  /** 'store' when the store priced it, 'catalog' when we constructed the handoff. */
+  pricedBy: 'store' | 'catalog';
 };
 
 function openCart(customerId: string): string {
@@ -63,6 +70,92 @@ export function clearCart(customerId: string): void {
  * customer on the brand's own cart, pre-filled. Non-Shopify brands fall back to the
  * product URL, and the console labels the difference.
  */
+/**
+ * Ask the store to price the cart when it will.
+ *
+ * A product feed carries list prices, so a locally computed subtotal misses automatic
+ * promotions — ONEHOPE's card read $20.00 against a real charge of $17.00. Where the
+ * storefront exposes `update_cart`, it returns the true total, the discounts by name, and a
+ * genuine checkout URL. Where it does not, the constructed permalink still works.
+ */
+export async function getCartPriced(
+  customerId: string,
+  domain: string,
+  ingestPath: string,
+  mcpTools: string[],
+): Promise<CartView> {
+  const local = getCart(customerId, domain, ingestPath);
+  if (!local.lines.length || !mcpTools.includes('update_cart')) return local;
+
+  const db = getDb();
+
+  /*
+   * `update_cart` adds rather than sets, so reusing a remote cart id accumulates: one bottle
+   * priced twice showed a $6.00 discount on a $34.00 total for a single $20.00 item. The
+   * local cart is the source of truth and the remote cart is a pricing artifact, so a
+   * changed cart gets a fresh one.
+   *
+   * The signature keeps that from costing a network call on every turn: unchanged contents
+   * reuse the stored total, and only a real change is re-priced.
+   */
+  const signature = local.lines
+    .map((l) => `${l.variant_id}:${l.qty}`)
+    .sort()
+    .join(',');
+
+  const row = db
+    .prepare('select remote_cart_id, remote_total_cents, remote_discounts_json, remote_signature, permalink from cart where id = ?')
+    .get(local.cartId) as
+    | {
+        remote_cart_id: string | null;
+        remote_total_cents: number | null;
+        remote_discounts_json: string | null;
+        remote_signature: string | null;
+        permalink: string | null;
+      }
+    | undefined;
+
+  if (row?.remote_signature === signature && row.remote_total_cents !== null) {
+    return {
+      ...local,
+      totalCents: row.remote_total_cents,
+      discounts: JSON.parse(row.remote_discounts_json ?? '[]'),
+      permalink: row.permalink ?? local.permalink,
+      pricedBy: 'store',
+    };
+  }
+
+  const priced = await priceCartViaMcp(
+    domain,
+    local.lines
+      .filter((l) => l.variant_id)
+      .map((l) => ({ variantId: `gid://shopify/ProductVariant/${l.variant_id}`, quantity: l.qty })),
+    // Deliberately not continuing the previous cart — see above.
+    null,
+  );
+  if (!priced) return local;
+
+  db.prepare(
+    `update cart set remote_cart_id = ?, remote_total_cents = ?, remote_discounts_json = ?,
+                     remote_signature = ?, permalink = ? where id = ?`,
+  ).run(
+    priced.cartId,
+    priced.totalCents,
+    JSON.stringify(priced.discounts),
+    signature,
+    priced.checkoutUrl,
+    local.cartId,
+  );
+
+  return {
+    ...local,
+    totalCents: priced.totalCents,
+    discounts: priced.discounts,
+    permalink: priced.checkoutUrl,
+    pricedBy: 'store',
+  };
+}
+
 export function getCart(customerId: string, domain: string, ingestPath: string): CartView {
   const db = getDb();
   const cartId = openCart(customerId);
@@ -92,7 +185,10 @@ export function getCart(customerId: string, domain: string, ingestPath: string):
     cartId,
     lines,
     subtotalCents,
+    totalCents: null,
+    discounts: [],
     currency: lines[0]?.currency ?? 'USD',
     permalink,
+    pricedBy: 'catalog',
   };
 }

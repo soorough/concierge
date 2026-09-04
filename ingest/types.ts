@@ -40,6 +40,8 @@ export type ContextPack = {
     category: 'alcohol' | 'supplement' | 'general';
     smsVendor: string | null;
     ingestPath: IngestPath;
+    /** Storefront MCP tools this brand exposes, discovered at ingest. */
+    mcpTools: string[];
   };
   products: PackProduct[];
   policies: PackPolicy[];

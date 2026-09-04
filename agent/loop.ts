@@ -6,7 +6,7 @@ import { buildSystemBlocks } from './prompt.js';
 import { runPreRails } from './rails/pre.js';
 import { runPostRails, parseModelOutput, type ModelAction } from './rails/post.js';
 import { getProvider } from './providers/index.js';
-import { addToCart, getCart, type CartView } from './cart.js';
+import { addToCart, getCartPriced, type CartView } from './cart.js';
 import { checkTurnAllowed, recordSpend } from './limits.js';
 import type { StoredBrand } from '../store/queries.js';
 import type { RailEvent } from './rails/types.js';
@@ -211,7 +211,12 @@ export async function runTurn(opts: {
     });
   }
 
-  const cart = getCart(customer.id, brand.domain, brand.ingest_path);
+  const cart = await getCartPriced(
+    customer.id,
+    brand.domain,
+    brand.ingest_path,
+    JSON.parse(brand.mcp_tools_json ?? '[]') as string[],
+  );
 
   /*
    * The card follows cart state rather than the model choosing to emit show_checkout.

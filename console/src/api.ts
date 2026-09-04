@@ -15,8 +15,14 @@ export type CartLine = {
 };
 
 export type Cart = {
-  cartId: string; lines: CartLine[]; subtotalCents: number;
-  currency: string; permalink: string | null;
+  cartId: string;
+  lines: CartLine[];
+  subtotalCents: number;
+  totalCents: number | null;
+  discounts: { title: string; amountCents: number }[];
+  currency: string;
+  permalink: string | null;
+  pricedBy: 'store' | 'catalog';
 };
 
 export type TurnResult = {

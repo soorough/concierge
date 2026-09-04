@@ -1,6 +1,7 @@
 import { safeFetch } from './fetch.js';
 import { stripHtml } from './text.js';
 import { fetchBrandMeta, classifyCategory } from './brandmeta.js';
+import { discoverMcpTools } from './mcp.js';
 import type { ContextPack, PackPolicy, PackProduct, OnProgress } from './types.js';
 
 type ShopifyVariant = { id: number; sku: string | null; price: string; available: boolean; title: string };
@@ -250,6 +251,14 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
   const meta = await fetchBrandMeta(domain);
   if (meta.smsVendor) onProgress({ type: 'stage', stage: 'vendor', detail: meta.smsVendor });
 
+  onProgress({ type: 'stage', stage: 'mcp', detail: 'checking for a storefront MCP endpoint' });
+  const mcpTools = await discoverMcpTools(domain);
+  onProgress({
+    type: 'stage',
+    stage: 'mcp',
+    detail: mcpTools.length ? mcpTools.join(', ') : 'none exposed',
+  });
+
   onProgress({ type: 'stage', stage: 'currency', detail: 'reading the shop\'s own currency' });
   const { currency, country } = await shopCurrency(domain);
   onProgress({
@@ -330,6 +339,7 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
       category,
       smsVendor: meta.smsVendor,
       ingestPath: 'shopify',
+      mcpTools,
     },
     products,
     policies,

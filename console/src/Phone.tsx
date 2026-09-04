@@ -133,15 +133,26 @@ export function Phone({
               </div>
             ))}
 
+            {/* When the store priced the cart itself, its discounts and total are shown.
+                Otherwise the subtotal is list price and the card says promotions apply at
+                checkout, rather than implying a figure the customer will not be charged. */}
+            {cart.discounts.map((d, i) => (
+              <div className="card__discount" key={i}>
+                <span>{d.title}</span>
+                <span>−{money(d.amountCents, cart.currency)}</span>
+              </div>
+            ))}
+
             <div className="card__total">
-              <span>Subtotal · {cart.lines.reduce((n, l) => n + l.qty, 0)} item{cart.lines.reduce((n, l) => n + l.qty, 0) === 1 ? '' : 's'}</span>
-              <b>{money(cart.subtotalCents, cart.currency)}</b>
+              <span>
+                {cart.pricedBy === 'store' ? 'Total' : 'Subtotal'} ·{' '}
+                {cart.lines.reduce((n, l) => n + l.qty, 0)} item
+                {cart.lines.reduce((n, l) => n + l.qty, 0) === 1 ? '' : 's'}
+              </span>
+              <b>{money(cart.totalCents ?? cart.subtotalCents, cart.currency)}</b>
             </div>
 
-            {/* A storefront's product feed carries list prices; automatic promotions are
-                applied at checkout. Saying so is better than showing a total the customer
-                will not be charged. */}
-            {brand.offers.length > 0 && (
+            {cart.pricedBy === 'catalog' && brand.offers.length > 0 && (
               <div className="card__promo">{brand.offers[0]} — applied at checkout</div>
             )}
 

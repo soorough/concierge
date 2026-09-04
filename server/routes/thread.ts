@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../store/db.js';
 import { getOrCreateCustomer, recentTurns, railEventsFor } from '../../store/session.js';
 import { runTurn } from '../../agent/loop.js';
-import { getCart, setQty, clearCart } from '../../agent/cart.js';
+import { getCartPriced, setQty, clearCart } from '../../agent/cart.js';
 import { currentFacts, allFacts, writeFact } from '../../store/ledger.js';
 import type { StoredBrand } from '../../store/queries.js';
 
@@ -66,7 +66,7 @@ export async function registerThreadRoutes(app: FastifyInstance) {
       if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
       const customer = getOrCreateCustomer(brandId, sessionId);
       setQty(customer.id, productId, qty);
-      return getCart(customer.id, brand.domain, brand.ingest_path);
+      return getCartPriced(customer.id, brand.domain, brand.ingest_path, JSON.parse(brand.mcp_tools_json ?? '[]'));
     },
   );
 
@@ -76,7 +76,7 @@ export async function registerThreadRoutes(app: FastifyInstance) {
     if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
     const customer = getOrCreateCustomer(brandId, sessionId);
     clearCart(customer.id);
-    return getCart(customer.id, brand.domain, brand.ingest_path);
+    return getCartPriced(customer.id, brand.domain, brand.ingest_path, JSON.parse(brand.mcp_tools_json ?? '[]'));
   });
 
   /** The age gate is a real state change, not a UI flag. */
@@ -129,6 +129,6 @@ export async function registerThreadRoutes(app: FastifyInstance) {
     const brand = getDb().prepare('select * from brand where id = ?').get(brandId) as StoredBrand | undefined;
     if (!brand) return reply.code(404).send({ error: 'brand not ingested' });
     const customer = getOrCreateCustomer(brandId, sessionId);
-    return getCart(customer.id, brand.domain, brand.ingest_path);
+    return getCartPriced(customer.id, brand.domain, brand.ingest_path, JSON.parse(brand.mcp_tools_json ?? '[]'));
   });
 }

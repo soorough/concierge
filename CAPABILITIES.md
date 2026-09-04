@@ -47,7 +47,8 @@ forever.
 | Policy questions | Shipping, delivery times, returns, refunds, damage, cancellation, signature requirements, minimum order, wine club — answered verbatim from the brand's own pages |
 | Shipping eligibility | "Do you ship to Utah?" answered from the brand's real state list |
 | Cart | Add, change quantity, remove, live subtotal computed from database prices |
-| Checkout handoff | A real Shopify cart permalink that lands on the brand's own pre-filled cart |
+| Checkout handoff | The store prices the cart over its own MCP endpoint where available — real totals, named discounts and a genuine checkout URL — falling back to a constructed cart permalink where it is not |
+| Storefront MCP | `/api/mcp` tools discovered at ingest and recorded per brand; 3 of 4 brands tested expose cart tools, 1 exposes only policy search |
 | Age gate | Tappable in-thread confirmation on alcohol brands, gating the checkout card |
 | Memory | Durable facts — style, budget, occasion, allergy, gifting — with contradictions superseding rather than duplicating |
 | Second source | A rep's field note extracted into the same ledger, outranked by anything the customer says |
@@ -146,9 +147,9 @@ Things that work but are not solid, listed so they are not discovered by a custo
 - **Arithmetic over policy.** Asked how many states it ships to, the agent has answered
   both "43" and "44" in different turns. The list is ground truth; the count is the model
   counting, and nothing checks it.
-- **Cart totals are list prices.** A storefront's product feed does not carry automatic
-  promotions, so the card shows the subtotal before them and says so. It cannot show the
-  figure the customer will actually be charged.
+- **Cart totals are list prices when the store will not price them.** Where a storefront
+  exposes `update_cart` the card shows the real total and the discounts by name. Where it
+  does not, the subtotal is list price and the card says promotions apply at checkout.
 - **Derived delivery estimates.** "1–3 days processing plus 3–7 days shipping, so roughly
   6–10 business days" is arithmetic, not policy. The delivery rail checks that the numbers
   appear in the policy text, which a derived figure can satisfy coincidentally.

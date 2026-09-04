@@ -46,6 +46,8 @@ export async function safeFetch(
     accept?: string;
     /** Extra request headers. Used to pin a storefront to the brand's own market. */
     headers?: Record<string, string>;
+    method?: string;
+    body?: string;
   } = {},
 ): Promise<{ res: Response; body: string; finalUrl: string }> {
   const timeoutMs = opts.timeoutMs ?? 12_000;
@@ -73,6 +75,8 @@ export async function safeFetch(
       res = await fetch(target, {
         redirect: 'manual',
         signal: ctrl.signal,
+        method: opts.method ?? 'GET',
+        ...(opts.body ? { body: opts.body } : {}),
         headers: { ...BASE_HEADERS, Accept: opts.accept ?? '*/*', ...(opts.headers ?? {}) },
       });
     } finally {

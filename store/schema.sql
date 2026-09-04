@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS brand (
   free_ship_threshold INTEGER,
   restricted_regions_json TEXT,
   offers_json TEXT,
+  mcp_tools_json TEXT,
   products_total INTEGER DEFAULT 0,
   products_excluded INTEGER DEFAULT 0,
   missing_json TEXT,             -- what ingest could not find
@@ -112,6 +113,13 @@ CREATE TABLE IF NOT EXISTS cart (
   customer_id TEXT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
   status TEXT DEFAULT 'open',
   permalink TEXT,
+  -- Set when the store priced the cart itself over MCP: its cart id, its checkout URL, and
+  -- the total after automatic promotions, which a product feed cannot provide.
+  remote_cart_id TEXT,
+  remote_total_cents INTEGER,
+  remote_discounts_json TEXT,
+  -- Contents the remote cart was priced for, so unchanged carts are not re-priced.
+  remote_signature TEXT,
   updated_at INTEGER
 );
 
