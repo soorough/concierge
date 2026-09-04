@@ -67,7 +67,9 @@ These need your credentials, so they are yours to run, not mine:
 
 1. `npx @railway/cli login` — opens a browser
 2. Create the project and link it: `npx @railway/cli init` then `npx @railway/cli link`
-3. Add a **volume** mounted at `/data` (Railway dashboard → service → Variables → Volumes).
+3. Add a **volume** mounted at `/data`. It is not under the service's Settings — create it
+   from the project canvas (right-click empty space → Volume, or `+ Create` → Volume, or
+   `Cmd+K` → "volume"), then attach it to the service with mount path `/data`.
    Without it the database is wiped on every deploy.
 4. Set the variables below
 
@@ -127,9 +129,14 @@ and every conversation with it. That happened on the first deploy here.
 curl https://<your-app>.up.railway.app/api/health
 ```
 
-`storage.persistent` must be `true`. If it is `false` the response says where the database
-actually is, the server logs a warning at boot, and the console shows a `NOT PERSISTENT` row
-in the operator column. Set `DB_PATH` and redeploy.
+`storage.persistent` must be `true` with `"reason": "on a mounted volume"`.
+
+The check compares the device id of the database's directory against the root filesystem,
+because a path alone proves nothing: with `DB_PATH=/data/concierge.db` and no volume mounted
+there, the process simply creates `/data` as an ordinary directory inside the container. That
+is exactly what happened here — health reported persistent, three brands were ingested, and
+the next deploy took them. Both a missing volume and a relative `DB_PATH` are reported with
+the reason, at boot in the logs and in the console's operator column.
 
 ## After deploying
 
