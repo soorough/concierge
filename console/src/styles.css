@@ -515,3 +515,38 @@ input, textarea { font: inherit; color: inherit; }
 
 .lock__box .empty { padding-bottom: 14px; line-height: 1.55; }
 .lock__box .field { margin-bottom: 0; }
+
+/* ── remove a brand ──────────────────────────────────────────────────── */
+
+.remove {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.remove button {
+  border: 1px solid var(--rule-strong);
+  background: transparent;
+  padding: 6px 11px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.remove button:disabled { opacity: 0.45; }
+
+.remove__go {
+  border-color: var(--block) !important;
+  color: var(--block);
+}
+
+.remove__ask {
+  flex: 1 1 100%;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--block);
+}

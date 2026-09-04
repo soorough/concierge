@@ -3,16 +3,44 @@ import { api, ingestStream, type Brand } from './api';
 
 type LogLine = { k: string; v: string; cls?: string };
 
-export function Ingest({ brand, onIngested }: { brand: Brand | null; onIngested: (domain: string) => void }) {
+export function Ingest({
+  brand,
+  onIngested,
+  onRemoved,
+}: {
+  brand: Brand | null;
+  onIngested: (domain: string) => void;
+  onRemoved: () => void;
+}) {
   const [domain, setDomain] = useState(brand?.domain ?? 'onehopewine.com');
   const [verdict, setVerdict] = useState<{ path: string; detail: string; ms: number } | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState(false);
+  // Removing a brand deletes its threads, facts and carts too, so it asks once rather than
+  // relying on a browser dialog.
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Follow the selected brand, so the field never contradicts the thread beside it.
   useEffect(() => {
     if (brand?.domain) setDomain(brand.domain);
+    setConfirmRemove(false);
   }, [brand?.domain]);
+
+  const remove = async () => {
+    if (!brand) return;
+    setBusy(true);
+    try {
+      await api.deleteBrand(brand.domain);
+      setConfirmRemove(false);
+      setVerdict(null);
+      setLog([]);
+      onRemoved();
+    } catch (e) {
+      setLog([{ k: 'error', v: (e as Error).message, cls: 'errline' }]);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const run = async (force: boolean) => {
     setBusy(true);
@@ -129,6 +157,25 @@ export function Ingest({ brand, onIngested }: { brand: Brand | null; onIngested:
               </div>
             ))
           )}
+
+          <p className="eyebrow"><span>Remove</span></p>
+          <div className="remove">
+            {confirmRemove ? (
+              <>
+                <span className="remove__ask">
+                  Delete {brand.name} and every thread, fact and cart under it?
+                </span>
+                <button className="remove__go" onClick={remove} disabled={busy}>
+                  {busy ? 'Removing' : 'Delete'}
+                </button>
+                <button onClick={() => setConfirmRemove(false)} disabled={busy}>
+                  Keep
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setConfirmRemove(true)}>Remove {brand.domain}</button>
+            )}
+          </div>
         </>
       )}
     </div>

@@ -165,6 +165,17 @@ export function App() {
             await loadBrand(domain);
             await refreshBrands();
           }}
+          onRemoved={async () => {
+            // Fall through to whatever is left, or an empty console if nothing is.
+            const remaining = await api.brands().catch(() => []);
+            setBrands(remaining);
+            setBrand(null);
+            setTurns([]);
+            setFacts({ current: [], all: [] });
+            setCart(null);
+            setShowCheckout(false);
+            if (remaining.length) await loadBrand(remaining[0].domain);
+          }}
         />
 
         <div className="col col--stage">

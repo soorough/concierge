@@ -75,6 +75,9 @@ const json = async (r: Response) => {
 
 const get = (url: string) => fetch(url, { headers: authHeaders() }).then(json);
 
+const del = (url: string) =>
+  fetch(url, { method: 'DELETE', headers: authHeaders() }).then(json);
+
 const post = (url: string, body: unknown) =>
   fetch(url, {
     method: 'POST',
@@ -107,6 +110,8 @@ export const api = {
   brands: (): Promise<{ id: string; domain: string; name: string; category: string }[]> =>
     get('/api/brands'),
   brand: (domain: string): Promise<Brand> => get(`/api/brand/${encodeURIComponent(domain)}`),
+  deleteBrand: (domain: string): Promise<{ deleted: string }> =>
+    del(`/api/brand/${encodeURIComponent(domain)}`),
   preflight: (domain: string) => post('/api/preflight', { domain }),
   turn: (brandId: string, sessionId: string, text: string): Promise<TurnResult> =>
     post('/api/turn', { brandId, sessionId, text }),
