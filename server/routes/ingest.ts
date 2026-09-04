@@ -73,6 +73,47 @@ export async function registerIngestRoutes(app: FastifyInstance) {
     return { ...metrics, slos: checkSlos(metrics) };
   });
 
+  /**
+   * Remove a brand and everything hanging off it.
+   *
+   * Demoing a live ingest means starting without it. Cascades handle customers, turns,
+   * rail events, facts and carts; the FTS indexes follow their triggers.
+   */
+  app.delete<{ Params: { domain: string } }>('/api/brand/:domain', async (req, reply) => {
+    let domain: string;
+    try {
+      domain = normaliseDomain(decodeURIComponent(req.params.domain));
+    } catch {
+      return reply.code(400).send({ error: `not a valid domain: ${req.params.domain}` });
+    }
+    const brand = getBrandByDomain(domain);
+    if (!brand) return reply.code(404).send({ error: 'not ingested' });
+    getDb().prepare('delete from brand where id = ?').run(brand.id);
+    return { deleted: domain };
+  });
+
+  /**
+   * Clear everything, including recorded turns and spend.
+   *
+   * Requires ?confirm=yes so a stray request cannot empty a running deployment, and it is
+   * behind the same password as everything else.
+   */
+  app.post<{ Querystring: { confirm?: string } }>('/api/reset', async (req, reply) => {
+    if (req.query?.confirm !== 'yes') {
+      return reply.code(400).send({ error: 'add ?confirm=yes to clear all brands, threads and spend' });
+    }
+    const db = getDb();
+    const counts = {
+      brands: (db.prepare('select count(*) c from brand').get() as { c: number }).c,
+      turns: (db.prepare('select count(*) c from turn').get() as { c: number }).c,
+    };
+    db.transaction(() => {
+      db.prepare('delete from brand').run();
+      db.prepare('delete from spend_log').run();
+    })();
+    return { cleared: counts };
+  });
+
   app.get('/api/brands', async () =>
     getDb().prepare('select id, domain, name, category, detected_sms_vendor, ingested_at from brand order by ingested_at desc').all(),
   );

@@ -597,3 +597,23 @@ RAIL_CASES.push(
     },
   },
 );
+
+// Brand naming is ingest, not a rail, but it lands in the thread header where a customer
+// reads it — Magic Spoon's page title is "High Protein, Keto-Friendly, 0g Sugar Cereal |
+// Magic Spoon Cereal", which is written for search engines rather than for a conversation.
+const { cleanBrandName } = await import('../ingest/brandmeta.js');
+
+for (const [raw, expected] of [
+  ['High Protein, Keto-Friendly, 0g Sugar Cereal | Magic Spoon Cereal', 'Magic Spoon Cereal'],
+  ['Graza — Everyday Olive Oil for Drizzling and Sizzling', 'Graza'],
+  ['ONEHOPE Wine', 'ONEHOPE Wine'],
+  ['Wolf Tooth Components', 'Wolf Tooth Components'],
+] as const) {
+  RAIL_CASES.push({
+    name: `brand name from ${JSON.stringify(raw).slice(0, 34)}…`,
+    run: () => {
+      const got = cleanBrandName(raw);
+      return { pass: got === expected, got: String(got) };
+    },
+  });
+}

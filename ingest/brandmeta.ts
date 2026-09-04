@@ -74,6 +74,28 @@ export function extractPalette(sources: string[]): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([h]) => h);
 }
 
+/**
+ * Brands without an `og:site_name` fall back to the page title, which is written for search
+ * engines rather than for a message thread — Magic Spoon's reads "High Protein,
+ * Keto-Friendly, 0g Sugar Cereal | Magic Spoon Cereal". Where a long title is split by a
+ * separator, the shortest part is almost always the name and the rest is the pitch.
+ *
+ * Only applied to titles long enough to be a pitch, so short two-part names are left alone.
+ */
+export function cleanBrandName(raw: string | null): string | null {
+  if (!raw) return null;
+  const name = raw.trim();
+  if (name.length <= 35) return name;
+
+  const parts = name
+    .split(/\s[|–—·]\s|\s[-]\s/)
+    .map((p) => p.trim())
+    .filter((p) => p.length >= 3);
+  if (parts.length < 2) return name;
+
+  return parts.reduce((shortest, p) => (p.length < shortest.length ? p : shortest));
+}
+
 export type BrandMeta = {
   name: string | null;
   description: string | null;
@@ -106,7 +128,12 @@ export async function fetchBrandMeta(domain: string): Promise<BrandMeta> {
   const logo = meta(html, 'og:image');
 
   return {
-    name: meta(html, 'og:site_name') ?? meta(html, 'og:title') ?? html.match(/<title[^>]*>([^<]+)</i)?.[1]?.trim() ?? null,
+    name: cleanBrandName(
+      meta(html, 'og:site_name') ??
+        meta(html, 'og:title') ??
+        html.match(/<title[^>]*>([^<]+)</i)?.[1]?.trim() ??
+        null,
+    ),
     description: meta(html, 'og:description') ?? meta(html, 'description'),
     // Brands still publish http:// og:image URLs, which a console served over https
     // silently refuses as mixed content. Upgrade rather than render a broken avatar.
