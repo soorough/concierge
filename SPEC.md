@@ -1,5 +1,11 @@
 # concierge — agent commerce, end to end
 
+> **This is the spec we agreed before building, kept as written.** Several decisions changed
+> under evidence once it ran against real catalogs — products are addressed by catalog
+> number rather than SKU, the whole catalog is sent rather than a retrieved slice, and
+> customer-facing policy is carried rather than retrieved. `CAPABILITIES.md` is the current
+> truth about what the system does; `DECISIONS.md` records what changed and why.
+
 Paste a brand's domain. Seconds later you are texting an agent that knows their real
 catalog, their real prices, and their real policies, and can hand you a real cart.
 
