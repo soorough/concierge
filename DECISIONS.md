@@ -346,9 +346,9 @@ of code that is not running.
 
 ## 25. The rails are the telemetry
 
-Nothing was watching production. There were 59 deterministic tests and 29 adversarial
-probes, both run by hand before shipping, and that is a different thing from knowing
-whether the running system is behaving.
+Nothing was watching production. The deterministic tests and adversarial probes were both
+run by hand before shipping, and that is a different thing from knowing whether the running
+system is behaving.
 
 The raw material already existed. Every turn records cost, latency and tokens; every rail
 firing is a row with a code and a level. Aggregating them gives a live safety signal for
@@ -391,6 +391,71 @@ not be charged is worse than saying which number this is.
 The wider point is one this project keeps arriving at from different directions: a guardrail
 tuned to what the system could see at the time becomes a source of wrong answers when the
 system can see more. Rails need to be re-read whenever ingest gets better.
+
+## 27. Shopify already exposes an MCP endpoint, and I should have looked
+
+Every Shopify storefront serves `/api/mcp` unauthenticated. Asked whether one existed, the
+answer was to probe rather than recall: ONEHOPE, Wolf Tooth and Jones Road each expose
+`search_catalog`, `get_cart`, `update_cart`, `search_shop_policies_and_faqs` and
+`get_product_details`; Transparent Labs exposes only policy search. Availability is per-store
+and cannot be assumed.
+
+`update_cart` prices a cart against the store itself and returns what a product feed cannot:
+`subtotal 20.00`, `total 17.00`, `applied_discounts: [15% Sitewide Sale]`, and a genuine
+checkout URL. That is precisely the gap the hand-built permalink left, found by following the
+handoff to a real checkout and seeing $17.00 charged against a $20.00 card. The cart now
+prefers the store's own pricing and falls back to the permalink, because a quarter of the
+brands tested cannot offer it.
+
+What it does **not** replace is the catalog. MCP offers search, and this design deliberately
+sends the whole catalog so the model can rank across all of it and answer "what's your
+cheapest" — a question search cannot answer. Nor does it provide sellability filtering,
+category classification or vendor detection.
+
+And a subtler reason to keep it server-side: MCP is designed to hand tools to a model. Every
+price guarantee here rests on the model never handling a price. Calling the store from the
+server keeps that intact; exposing these tools to the model would quietly undo it.
+
+`update_cart` adds rather than sets, which cost an hour: reusing a remote cart id made one
+bottle price as two — a $6.00 discount on a $34.00 total for a single $20.00 item. The local
+cart is the source of truth and the remote cart is a pricing artifact, so a changed cart gets
+a fresh one, keyed by a signature of its contents so unchanged carts are not re-priced.
+
+## 28. A schema that only applies to empty databases
+
+`CREATE TABLE IF NOT EXISTS` creates a table or does nothing. It never adds a column to one
+that already exists — so every schema change after the first deployment applied cleanly to a
+fresh database and silently not at all to the live one.
+
+It surfaced as a puzzle: identical code priced carts correctly against the store locally and
+fell back to a constructed permalink in production. The cause was a `brand` table with
+`offers_json` but no `mcp_tools_json`, and a `cart` table missing all four columns the remote
+pricing needed. Ingest reported success throughout, because writing a brand does not touch
+those columns.
+
+Migration now carries an explicit list of columns added after the first deployment and adds
+any that are absent, logging what it did. Additive only, so a database of any age converges
+on the current schema.
+
+Two things worth taking from it. The first is that this was invisible for the same reason the
+storage check was wrong: nothing compared the *running* system against the *intended* one,
+only the shape of a thing against expectations. The second is that the failure mode of a
+missing migration is not a crash — it is a feature that quietly does not work, in production
+only, while every local test passes.
+
+## 29. My own patch scripts had the same bug
+
+Entries 27 and 28 were written twice before they appeared here. The scripts editing these
+documents replaced an anchor string and printed "patched" without checking the replacement
+matched, and an earlier edit had consumed the anchor. Two silent no-ops, reported as
+successes.
+
+It is the shape this project keeps meeting: the storage check that verified a path rather
+than a mount, the schema that applied only to empty databases, the probes that scored a
+fabricated policy as clean. A step that cannot fail loudly will eventually fail quietly, and
+the tooling used to build the guardrails deserves the same suspicion as the guardrails.
+
+## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a
 per-brand denylist. A real channel adapter with the brand's own credentials entered per

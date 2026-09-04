@@ -20,7 +20,7 @@ Verified end to end against three deliberately different catalogs, measured 2026
 | Brand | Catalog | Why it is here |
 |---|---|---|
 | ONEHOPE Wine | 97 sellable wines | Alcohol — age gates, restricted states, taste-driven |
-| Wolf Tooth Components | 309 sellable bike parts | Compatibility-driven, where a wrong answer is objectively wrong |
+| Wolf Tooth Components | 310 sellable bike parts | Compatibility-driven, where a wrong answer is objectively wrong |
 | Transparent Labs | 68 sellable supplements | Claim-sensitive, where the risk is what the agent asserts |
 
 ---
@@ -106,7 +106,7 @@ npm run restart               # builds the console, serves both on :3000
 
 | Command | What it does |
 |---|---|
-| `npm run evals` | 59 deterministic tests. No API key needed — the rails and ledger are pure logic |
+| `npm run evals` | 66 deterministic tests. No API key needed — the rails and ledger are pure logic |
 | `npm run stress` | 29 adversarial probes against a running agent |
 | `npm run monitor` | Live health against written-down service levels; exits non-zero on a breach |
 | `npm run numbers` | Reprints every figure quoted in these documents, from source |

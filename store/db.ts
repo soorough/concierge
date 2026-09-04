@@ -117,7 +117,7 @@ export function migrate(target?: DB): DB {
   const d = target ?? getDb();
   d.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
   const added = applyAddedColumns(d);
-  if (added.length) console.log(`migrate: added ${added.join(', ')}`);
+  if (added.length) console.error(`migrate: added ${added.join(', ')}`);
   d.exec(readFileSync(join(here, 'triggers.sql'), 'utf8'));
   return d;
 }

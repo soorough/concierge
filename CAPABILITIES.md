@@ -5,10 +5,10 @@ and what it cannot do yet. Written so nobody has to discover a limit in front of
 customer.
 
 Verified against three deliberately different catalogs — `onehopewine.com` (97 sellable
-wines, age-gated, taste-driven), `wolftoothcomponents.com` (309 sellable bike components,
+wines, age-gated, taste-driven), `wolftoothcomponents.com` (310 sellable bike components,
 compatibility-driven) and `transparentlabs.com` (68 sellable supplements, claim-sensitive) —
 with
-`npm run evals` (59 deterministic cases) and `npm run stress` (29 adversarial probes).
+`npm run evals` (66 deterministic cases) and `npm run stress` (29 adversarial probes).
 
 Every figure below was measured on **2026-09-04** and `npm run numbers` reprints all of them
 from source. Catalogs are live and they move: ONEHOPE was 122 products the day before this
@@ -33,6 +33,7 @@ forever.
 | Promotions | Percentage and free-shipping offers stated on the brand's site are captured, quotable by the agent, and shown on the checkout card as applying at checkout |
 | Preflight classification | `shopify` / `crawl` / `blocked` in about a second, with the bot wall named |
 | Caching | Results cached per domain with the ingest timestamp shown and a re-ingest button that genuinely re-runs |
+| Schema migration | Columns added after a deployment are applied to the existing database, not only to fresh ones |
 | Currency validation | The shop's own currency is read from `/meta.json` and checked against what the storefront served; a mismatch aborts rather than storing wrong prices |
 | Multiple brands | Ingested brands are switchable from the console; threads, carts and ledgers stay scoped per brand |
 
