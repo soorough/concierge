@@ -8,7 +8,13 @@ Verified against three deliberately different catalogs — `onehopewine.com` (97
 wines, age-gated, taste-driven), `wolftoothcomponents.com` (309 sellable bike components,
 compatibility-driven) and `transparentlabs.com` (68 sellable supplements, claim-sensitive) —
 with
-`npm run evals` (51 deterministic cases) and `npm run stress` (29 adversarial probes).
+`npm run evals` (59 deterministic cases) and `npm run stress` (29 adversarial probes).
+
+Every figure below was measured on **2026-09-04** and `npm run numbers` reprints all of them
+from source. Catalogs are live and they move: ONEHOPE was 122 products the day before this
+was written and 121 the day after, because they delisted one, and a sellable count changes
+whenever something goes out of stock. A number here is true on the day it was measured, not
+forever.
 
 ---
 
@@ -22,7 +28,7 @@ with
 | Brand identity | Name, logo, dominant palette, currency — the thread renders in the brand's own colours |
 | Category detection | `alcohol` → age gate and region blocking; `supplement` → health, research and regulatory claims blocked; `general` → neither |
 | Incumbent SMS vendor | Attentive, Postscript, Klaviyo, Emotive, Yotpo detected from script tags |
-| Sellability filtering | Price, availability and per-brand type denylist. ONEHOPE: 122 products → 98 sellable, 24 excluded |
+| Sellability filtering | Price, availability and per-brand type denylist. ONEHOPE: 121 products → 97 sellable, 24 excluded |
 | Honest gap reporting | Every page it could not find is listed by name and candidate URL |
 | Preflight classification | `shopify` / `crawl` / `blocked` in about a second, with the bot wall named |
 | Caching | Results cached per domain with the ingest timestamp shown and a re-ingest button that genuinely re-runs |

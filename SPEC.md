@@ -200,7 +200,7 @@ next to $0 packaging, and `Bundle` holds real $43 trios next to $0 wine-club pla
 Default denylist: `Component`, `wine-club-fee`, `SUBLIMATION`, `Rewards`, `GiftCard`.
 Per-brand config, not a global constant.
 
-Measured on ONEHOPE: **122 total → 98 sellable, 24 excluded** (15 zero-priced, 5 Rewards,
+Measured on ONEHOPE: **121 total → 97 sellable, 24 excluded** (15 zero-priced, 5 Rewards,
 4 Component, 2 wine-club-fee, 1 SUBLIMATION, 1 GiftCard, 1 unavailable).
 
 `NON_SELLABLE_SKU` is a post-model rail as a second line of defence.

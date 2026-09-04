@@ -14,7 +14,8 @@ out what they sell and what they may not say, and gives you a shopping agent in 
 thread. Beside the thread, an operator console shows what the machine did: every guardrail
 that fired, every fact it learned about the customer, and what each turn cost.
 
-Verified end to end against three deliberately different catalogs:
+Verified end to end against three deliberately different catalogs, measured 2026-09-04
+(`npm run numbers` reprints these — catalogs are live and the counts move):
 
 | Brand | Catalog | Why it is here |
 |---|---|---|
@@ -108,6 +109,7 @@ npm run restart               # builds the console, serves both on :3000
 | `npm run evals` | 59 deterministic tests. No API key needed — the rails and ledger are pure logic |
 | `npm run stress` | 29 adversarial probes against a running agent |
 | `npm run monitor` | Live health against written-down service levels; exits non-zero on a breach |
+| `npm run numbers` | Reprints every figure quoted in these documents, from source |
 | `npm run restart` | Rebuild and restart, killing by port |
 
 Against the deployment, set `MONITOR_URL` and `CONSOLE_PASSWORD`.

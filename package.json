@@ -15,7 +15,8 @@
     "db:reset": "rm -f data/concierge.db && tsx store/migrate.ts",
     "restart": "scripts/restart.sh",
     "monitor": "tsx evals/monitor.ts",
-    "build:deploy": "npm run build && rm -rf console/node_modules && npm prune --omit=dev"
+    "build:deploy": "npm run build && rm -rf console/node_modules && npm prune --omit=dev",
+    "numbers": "tsx evals/numbers.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

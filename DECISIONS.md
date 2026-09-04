@@ -16,14 +16,14 @@ queries stop naming things. That's the point to go hybrid — not to switch to p
 
 ## 2. Sellability is a price rule, not a type allowlist
 
-Verified against ONEHOPE's live catalog (122 products): `product_type` alone does not
+Verified against ONEHOPE's live catalog (121 products): `product_type` alone does not
 separate sellable from junk. The empty-type bucket holds real $100-$200 wines alongside
 $0 packaging ("2 Bottle Wood Box Shipper", "Crinkle"); `Bundle` holds real $43 trios
 alongside $0 wine-club placeholders.
 
     sellable = min_variant_price > 0 AND available AND product_type NOT IN denylist
 
-Measured: 122 total, 98 sellable, 24 excluded. The denylist is per-brand config, not a
+Measured: 121 total, 97 sellable, 24 excluded. The denylist is per-brand config, not a
 global constant, and `NON_SELLABLE_SKU` backstops it as a post-model rail. An agent that
 offers a customer "Packaging & Fulfillment" has destroyed the premise that it knows the
 business — so this fails closed in two places.
@@ -360,8 +360,8 @@ Five service levels are written down rather than left to judgement, and escalati
 a ceiling for a reason worth stating: an agent that refuses a quarter of its turns is not
 safe, it is useless.
 
-Over 417 real turns: 14.6% escalated, 9.1% blocked, 1.9% recovered, p95 1.8s, 0.301¢ per
-turn — all inside limits.
+Over 418 real turns: 14.6% escalated, 9.1% blocked, 1.9% recovered, p50 1,837ms and p95
+2,623ms, 0.304¢ per turn — all inside limits.
 
 **What this does not measure is accuracy.** A turn where no rail fired is a turn nobody
 objected to, which is not the same as a turn that was right. Closing that needs a judge
