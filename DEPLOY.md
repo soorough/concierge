@@ -18,16 +18,26 @@ query survive unchanged.
 
 ## Railway dashboard settings
 
-Config-as-code is deprecated and cannot be enabled on new services, so `railway.json` and
-`nixpacks.toml` in this repo are ignored — the builder is Railpack and these values come
-from the dashboard.
+`railway.json` and `nixpacks.toml` **are** honoured — the deprecation notice only blocks
+services that have never used config-as-code from opting in, and existing files keep working.
+The first build log confirms it: the setup phase installs `nodejs_20, python3, gcc, gnumake`
+from `nixpacks.toml`, and the build and start commands come from `railway.json`.
+
+Two things that broke the first build, both worth knowing:
+
+- **Do not run `npm ci` in the build command.** Nixpacks already runs it in the install
+  phase, and `npm ci` wipes `node_modules` — which fails against the mounted build cache with
+  `EBUSY: rmdir '/app/node_modules/.cache'`. The build command uses `npm install
+  --include=dev`, which updates in place rather than deleting.
+- **`--include=dev` is not optional.** The builder sets production mode, which omits
+  devDependencies, and `typescript` is one — so `tsc` would not exist at build time.
 
 | Setting | Value | Why |
 |---|---|---|
-| Builder | Railpack (default) | Picks up `npm run build` and `npm start` from package.json |
-| Custom Build Command | *leave empty* | The root build compiles the server, copies the SQL, and installs and builds the console |
-| Custom Start Command | `npm start` | Runs the compiled server |
-| Healthcheck Path | `/api/health` | The only route left open when a password is set |
+| Builder | Nixpacks | `nixpacks.toml` adds the toolchain `better-sqlite3` needs to compile |
+| Custom Build Command | *leave empty* | `railway.json` supplies it |
+| Custom Start Command | *leave empty* | `railway.json` supplies `npm start` |
+| Healthcheck Path | *leave empty* | `railway.json` supplies `/api/health`, the only route left open when a password is set |
 | Replicas | **1** | SQLite on one volume. A second replica is a second database and a split brain |
 | Serverless / scale to zero | **off** | A cold start reloads a native module and loses the prompt cache; the first message after a sleep is slow and expensive |
 | Volume | **mount at `/data`** | Without it the database is wiped on every deploy and every ingested brand disappears |
