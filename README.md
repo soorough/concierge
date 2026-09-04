@@ -6,6 +6,7 @@ catalog, their real prices, and their real policies, and can hand you a real car
 - **Spec:** [SPEC.md](SPEC.md)
 - **What it supports, and what it does not:** [CAPABILITIES.md](CAPABILITIES.md)
 - **Why it's built this way:** [DECISIONS.md](DECISIONS.md)
+- **Deploying:** [DEPLOY.md](DEPLOY.md)
 
 ## Status
 

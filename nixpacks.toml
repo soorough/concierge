@@ -1,0 +1,3 @@
+# better-sqlite3 is a native module, so the build image needs a toolchain to compile it.
+[phases.setup]
+nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake"]
