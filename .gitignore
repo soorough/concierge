@@ -6,3 +6,6 @@ data/
 *.log
 .DS_Store
 fixtures/*.raw.json
+
+# Personal interview prep — not for the public repo
+INTERVIEW_PREP.md
