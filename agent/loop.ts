@@ -1,5 +1,11 @@
 import { getDb } from '../store/db.js';
-import { getOrCreateCustomer, recordTurn, recordRailEvent, type Customer } from '../store/session.js';
+import {
+  getOrCreateCustomer,
+  recordTurn,
+  recordRailEvent,
+  recordToolCall,
+  type Customer,
+} from '../store/session.js';
 import { writeFact } from '../store/ledger.js';
 import { retrieve, type RetrievedProduct } from './retrieve.js';
 import { buildSystemBlocks } from './prompt.js';
@@ -10,13 +16,28 @@ import {
   ESCALATION_REPLY,
   type ModelAction,
   type LivePriceEntry,
+  type ParsedOutput,
 } from './rails/post.js';
 import { resolvePrice, checkAvailability, writeCart, hasLivePath } from './tools.js';
 import { getProvider } from './providers/index.js';
-import { getCartPriced, type CartView } from './cart.js';
+import type { ModelMessage } from './providers/types.js';
+import { TOOL_SPECS, executeTool, type ExecutedTool } from './toolspec.js';
+import { routeTurn } from './route.js';
+import { getCartPriced, cartDisagreement, type CartView } from './cart.js';
 import { checkTurnAllowed, recordSpend } from './limits.js';
 import type { StoredBrand } from '../store/queries.js';
 import type { RailEvent } from './rails/types.js';
+
+/**
+ * How many tools one turn may call.
+ *
+ * A budget, not a safety valve. Without it a model that keeps finding reasons to look
+ * something up turns a fixed-cost turn into an unbounded one, and the cost tail is what
+ * makes per-conversation pricing unpredictable. Three covers every real trajectory seen
+ * here — price, then stock, then a policy check — and a turn that wants a fourth is a turn
+ * that has not understood the question, which is a good moment to ask a human.
+ */
+const TOOL_BUDGET = Number(process.env.TOOL_CALL_BUDGET ?? 3);
 
 export type TurnResult = {
   turnId: string;
@@ -30,6 +51,12 @@ export type TurnResult = {
   costCents: number;
   model: string | null;
   provider: string | null;
+  /** Every tool the model called this turn, in order. Empty on the single-call path. */
+  trace: { tool: string; args: Record<string, unknown>; source: string; ok: boolean; ms: number }[];
+  /** How many model calls the turn cost. One unless tools were used. */
+  modelCalls: number;
+  /** Why the turn took the path it took, shown beside cost and latency. */
+  route: string;
 };
 
 /** The same addressing the rails use: catalog number, SKU, or id. */
@@ -183,6 +210,9 @@ export async function runTurn(opts: {
       costCents: 0,
       model: null,
       provider: null,
+      trace: [],
+      modelCalls: 0,
+      route: 'pre-model rail, no model call',
     };
   }
 
@@ -210,6 +240,9 @@ export async function runTurn(opts: {
       costCents: 0,
       model: null,
       provider: null,
+      trace: [],
+      modelCalls: 0,
+      route: 'refused before any model call',
     };
   }
 
@@ -218,12 +251,18 @@ export async function runTurn(opts: {
 
   const offers = JSON.parse(brand.offers_json ?? '[]') as string[];
 
+  const route = routeTurn({ message: text, cartLines: retrieval.cartProducts.length });
+  const provider = getProvider();
+  const useTools = route.useTools && provider.supportsTools;
+
   const system = buildSystemBlocks({
     brand,
     retrieval,
     offers,
     restrictedRegions: JSON.parse(brand.restricted_regions_json ?? '[]') as string[],
     ageVerified: Boolean(customer.age_verified_at),
+    tools: useTools,
+    toolBudget: TOOL_BUDGET,
   });
 
   const history = retrieval.history
@@ -241,27 +280,116 @@ export async function runTurn(opts: {
    */
   prefetchLive(brand, retrieval);
 
-  // --- model call
-  const provider = getProvider();
-  const response = await provider.call({
-    // The catalog block is identical across a brand's turns, so it is cached; everything
-    // that changes per turn follows it.
-    system: [
-      { text: system.stable, cache: true },
-      { text: system.volatile },
-    ],
-    messages: [...history, { role: 'user', content: text }],
-    prefill: '{',
-  });
+  /*
+   * --- the loop
+   *
+   * Most turns are still exactly one constrained model call with the `{` prefill, which is
+   * the right shape for a cheap reactive turn and the shape every rail was built around. A
+   * loop earns its cost only when the agent has to react to something it found, so the
+   * router decides which turn is which before any model call happens.
+   */
+  const toolIndex = buildIndex(retrieval.products);
+
+  const conversation: ModelMessage[] = [...history, { role: 'user', content: text }];
+  /** Each call tagged with the pass of the loop that asked for it, for trajectory scoring. */
+  const trace: (ExecutedTool & { iteration: number })[] = [];
+  const traceEvents: RailEvent[] = [];
+
+  let response: Awaited<ReturnType<typeof provider.call>> | null = null;
+  let modelCalls = 0;
+  // Summed across the loop. A turn's cost is what the turn cost, not what its last call did.
+  let costCents = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let iteration = 0;
+  let budgetExhausted = false;
+
+  while (true) {
+    response = await provider.call({
+      // The catalog block is identical across a brand's turns, so it is cached; everything
+      // that changes per turn follows it.
+      system: [
+        { text: system.stable, cache: true },
+        { text: system.volatile },
+      ],
+      messages: conversation,
+      // Tools and the prefill cannot be combined — see `providers/types.ts`.
+      ...(useTools ? { tools: TOOL_SPECS } : { prefill: '{' }),
+    });
+    modelCalls++;
+    costCents += response.costCents;
+    inputTokens += response.inputTokens;
+    outputTokens += response.outputTokens;
+    recordSpend(response.costCents);
+
+    if (response.stopReason !== 'tool_use' || !response.toolUses.length) break;
+
+    /*
+     * The budget is checked against what the model is asking for, not what it has already
+     * spent, so a turn is never left half-informed: either every tool in this round runs or
+     * none of them does and a human is asked. Silently answering with two thirds of the
+     * information the model said it needed is the failure mode worth avoiding.
+     */
+    if (trace.length + response.toolUses.length > TOOL_BUDGET) {
+      budgetExhausted = true;
+      traceEvents.push({
+        level: 'block',
+        code: 'TOOL_BUDGET_EXHAUSTED',
+        detail: `asked for ${trace.length + response.toolUses.length} tool call(s) against a budget of ${TOOL_BUDGET}`,
+      });
+      break;
+    }
+
+    iteration++;
+    const executed = await Promise.all(
+      response.toolUses.map((use) => executeTool(use, { brand, index: toolIndex })),
+    );
+    trace.push(...executed.map((c) => ({ ...c, iteration })));
+
+    for (const call of executed) {
+      traceEvents.push({
+        level: call.ok ? 'pass' : 'warn',
+        code: 'TOOL_CALL',
+        detail: `${call.tool}(${JSON.stringify(call.args)}) → ${call.source}, ${call.ms}ms`,
+      });
+    }
+
+    conversation.push({
+      role: 'assistant',
+      content: response.text,
+      toolUses: response.toolUses,
+    });
+    conversation.push({
+      role: 'user',
+      content: '',
+      toolResults: executed.map((c) => ({
+        toolUseId: c.toolUseId,
+        content: c.content,
+        isError: !c.ok,
+      })),
+    });
+  }
 
   /*
    * A model that returns something other than JSON should degrade, not fail. The text is
    * used as the reply and the rails still run over it, so a recovered turn is held to the
    * same standard as a parsed one.
    */
-  recordSpend(response.costCents);
-
-  const parsed = parseModelOutput(response.text);
+  const parsed: ParsedOutput = budgetExhausted
+    ? {
+        reply: '',
+        actions: [],
+        learned: [],
+        needs_age_check: false,
+        /*
+         * The rails turn this into the escalation reply and a warn event, exactly as they
+         * do when the model asks for a human itself. A turn that ran out of budget has not
+         * failed — it has found a question it could not answer inside its means, which is
+         * the same outcome by a different route.
+         */
+        escalate: `ran out of tool budget after ${trace.length} call(s)`,
+      }
+    : parseModelOutput(response!.text);
   const recoveryEvent: RailEvent | null = parsed.recovered
     ? { level: 'warn', code: 'OUTPUT_RECOVERED', detail: parsed.recovered }
     : null;
@@ -362,6 +490,20 @@ export async function runTurn(opts: {
   );
 
   /*
+   * `CART_MISMATCH`, asked of the store rather than of ourselves.
+   *
+   * The post-model rail already caught a reply naming one product while the action added
+   * another. This catches the half that only the store can answer: a line it dropped, a
+   * quantity it clamped, or a variant it would not take. A cart the store disagrees with
+   * cannot be handed to a customer, so the checkout card is withheld.
+   */
+  const disagreement = cartDisagreement(cart);
+  if (disagreement) {
+    post.events.push({ level: 'block', code: 'CART_MISMATCH', detail: `store disagrees: ${disagreement}` });
+    post.blockCheckout = true;
+  }
+
+  /*
    * The card follows cart state rather than the model choosing to emit show_checkout.
    * Leaving it to the model produced a real cart holding a real item with no way for the
    * customer to see or act on it: the agent said "adding it to your cart" and the thread
@@ -374,16 +516,38 @@ export async function runTurn(opts: {
     direction: 'out',
     text: post.reply,
     payload: showCheckout ? { card: 'checkout' } : null,
-    model: response.model,
-    provider: response.provider,
-    inputTokens: response.inputTokens,
-    outputTokens: response.outputTokens,
-    costCents: response.costCents,
+    model: response!.model,
+    provider: response!.provider,
+    inputTokens,
+    outputTokens,
+    costCents,
     latencyMs: Date.now() - started,
   });
-  for (const event of post.events) {
+
+  /*
+   * The trace is written against the outbound turn, so a turn's cost, its rails and the
+   * steps it took to get there all hang off the same row and the console can show them
+   * together. Rails first, then the trajectory, in the order it happened.
+   */
+  // The trajectory's events and the rails' events are one list from here on, so what is
+  // persisted, what the API returns and what the console renders cannot drift apart.
+  const events = [...traceEvents, ...post.events];
+  for (const event of events) {
     recordRailEvent(outboundTurnId, event.level, event.code, event.detail);
   }
+  trace.forEach((call, i) => {
+    recordToolCall({
+      turnId: outboundTurnId,
+      seq: i + 1,
+      iteration: call.iteration,
+      tool: call.tool,
+      args: call.args,
+      result: call.content,
+      source: call.source,
+      ok: call.ok,
+      ms: call.ms,
+    });
+  });
 
   return {
     turnId: outboundTurnId,
@@ -392,10 +556,21 @@ export async function runTurn(opts: {
     cart: cart.lines.length ? cart : null,
     showCheckout,
     needsAgeCheck: post.needsAgeCheck,
-    rails: post.events,
+    rails: events,
     latencyMs: Date.now() - started,
-    costCents: response.costCents,
-    model: response.model,
-    provider: response.provider,
+    costCents,
+    model: response!.model,
+    provider: response!.provider,
+    trace: trace.map((c) => ({
+      tool: c.tool,
+      args: c.args,
+      source: c.source,
+      ok: c.ok,
+      ms: c.ms,
+    })),
+    modelCalls,
+    route: provider.supportsTools
+      ? route.reason
+      : `${route.reason} — ${provider.name} tool calling not verified here`,
   };
 }

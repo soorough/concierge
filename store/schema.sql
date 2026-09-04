@@ -93,6 +93,27 @@ CREATE TABLE IF NOT EXISTS rail_event (
 );
 CREATE INDEX IF NOT EXISTS idx_rail_turn ON rail_event(turn_id);
 
+-- What the agent did before it answered, in the order it did it.
+--
+-- Separate from rail_event on purpose. A rail event is a judgement rendered on the output
+-- and its detail column is a display string; a tool call is a step in a trajectory, and
+-- scoring a trajectory means querying which tools ran, in what order, with what arguments.
+-- Neither fits in the other's shape.
+CREATE TABLE IF NOT EXISTS tool_call (
+  id TEXT PRIMARY KEY,
+  turn_id TEXT NOT NULL REFERENCES turn(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,          -- order within the turn, from 1
+  iteration INTEGER NOT NULL,    -- which pass of the loop asked for it
+  tool TEXT NOT NULL,
+  arguments_json TEXT,           -- what the model asked for
+  result_json TEXT,              -- what came back, truncated for display
+  source TEXT,                   -- live | snapshot | local
+  ok INTEGER NOT NULL DEFAULT 1,
+  ms INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_call_turn ON tool_call(turn_id, seq);
+
 -- append only. never UPDATE a fact's content.
 CREATE TABLE IF NOT EXISTS fact (
   id TEXT PRIMARY KEY,

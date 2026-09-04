@@ -37,6 +37,22 @@ export function Record({
   }, [turns.length]);
 
   const events = turns.flatMap((t) => t.rails.map((r) => ({ ...r, at: t.created_at })));
+
+  /*
+   * Turns that called a tool, with what the turn cost beside what it did.
+   *
+   * A loop makes cost per turn variable, and the honest thing is to show the variance
+   * rather than average it away — a turn that cost twice the usual should say what it
+   * bought with the difference.
+   */
+  const trajectories = turns
+    .filter((t) => t.tools && t.tools.length > 0)
+    .map((t) => ({
+      at: t.created_at,
+      costCents: t.cost_cents,
+      latencyMs: t.latency_ms,
+      calls: [...t.tools].sort((a, b) => a.seq - b.seq),
+    }));
   const superseded = facts.all.filter((f) => f.valid_to !== null);
 
   const submitNote = async () => {
@@ -69,6 +85,41 @@ export function Record({
             <span>
               <span className="code">{e.code}</span>
               {e.detail && <span className="detail"> · {e.detail}</span>}
+            </span>
+          </div>
+        ))
+      )}
+
+      <p className="eyebrow">
+        <span>Trajectory</span>
+        <span>{trajectories.length} turn{trajectories.length === 1 ? '' : 's'} used tools</span>
+      </p>
+      {trajectories.length === 0 ? (
+        <p className="empty">
+          No turn has needed a tool yet. Most do not — a question the catalog already answers
+          takes one model call.
+        </p>
+      ) : (
+        trajectories.map((t, i) => (
+          <div className="row" key={i}>
+            <time>{clock(t.at)}</time>
+            <span>
+              {t.calls.map((c) => (
+                <span key={c.seq}>
+                  <span className="code">{c.tool}</span>
+                  <span className="detail">
+                    {' '}
+                    {c.arguments_json} · {c.source}
+                    {c.ok ? '' : ' · failed'} · {c.ms}ms
+                  </span>
+                  <br />
+                </span>
+              ))}
+              <span className="detail">
+                {t.calls.length} call{t.calls.length === 1 ? '' : 's'}
+                {t.costCents === null ? '' : ` · ${t.costCents.toFixed(3)}¢`}
+                {t.latencyMs === null ? '' : ` · ${t.latencyMs}ms`}
+              </span>
             </span>
           </div>
         ))

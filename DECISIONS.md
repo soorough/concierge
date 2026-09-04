@@ -532,6 +532,115 @@ sentence the cart disagrees with. Comparing what the agent said against what the
 confirmed — rather than against what the agent itself did — is the stronger version of
 `CART_MISMATCH`, and it wants the loop before it is worth building properly.
 
+## 31. A loop is right for some turns and wrong for most
+
+The critique was that one constrained model call per turn is not an agent — no loop, no
+tools, purely reactive. It is correct, and the fix is not to make every turn a loop.
+
+A single constrained call is the right shape for a cheap reactive turn. "What goes with a
+ribeye" is reasoning over a catalog that is already in the prompt: there is nothing to look
+up, nothing to commit to, and a loop would add a second model call to reach the same answer.
+A loop is right when the agent has to *react to what it found* — when the answer depends on
+something it does not yet know.
+
+So the loop is routed, and the router is deterministic (`agent/route.ts`), in the same
+spirit as the pre-model rails. Price intent, availability intent, terms intent, intent to
+buy, or an open cart get tools. Everything else keeps the single call. A classifier here
+would be a model call to decide whether to make model calls.
+
+### Measured, on ONEHOPE
+
+| Turn | Path | Model calls | Tools | Cost | Latency |
+|---|---|---|---|---|---|
+| "what goes with a ribeye?" | single call | 1 | 0 | 0.218¢ | 1,978ms |
+| "how much is your cheapest wine?" | loop | 2 | 1 | 0.649¢ | 4,851ms |
+| "do you have the cabernet in stock?" | loop | 2 | 1 | 0.651¢ | 3,312ms |
+| "compare your three cheapest, which is in stock" | loop | 2 | 3 | 0.748¢ | 3,380ms |
+
+A loop turn costs roughly three times a single-call turn and takes roughly twice as long,
+because two sequential model calls cannot happen in under two seconds. That is not hidden.
+`npm run trace` prints the table above from real turns, and the console shows each turn's
+trajectory beside its own cost and latency rather than an average that would flatter both.
+
+The p50 target in `SPEC.md` §3 was written for a world where every turn had one shape. It
+still holds for the single-call path, which is most traffic; a loop turn is a different
+product with a different budget, and saying so is better than quietly moving the target.
+
+### Tools and the prefill cannot be combined
+
+Measured on Haiku 4.5 rather than assumed. Offering tools *and* prefilling the assistant
+turn with `{` is accepted by the API and produces the worst of both: the model writes a
+half-formed JSON object **and** a tool call in the same response, having been pulled in two
+directions.
+
+The prefill is what makes a JSON reply structurally the only option, and refusals in
+particular tend to drop out of a requested format when it is merely asked for. So this is
+the second reason the router exists: a turn that gains nothing from tools should not pay for
+them in output discipline either. Turns that do get tools return fenced JSON instead, which
+the existing fence-stripping in `parseModelOutput` already handles — verified, not hoped.
+
+### The budget has to be told to the model
+
+Three calls per turn, configurable by `TOOL_CALL_BUDGET`. A cap alone was not enough. Asked
+to compare three wines *and* check stock, the model asked for six tools at once and blew the
+budget before a single call ran — the cap fired, correctly, on a question it could have
+answered.
+
+Naming the budget in the prompt fixed it: it now narrows to three and answers. On four runs
+of that deliberately awkward question, three narrowed and one still over-asked and escalated.
+That residual rate is the honest number, and escalating is the specified behaviour, not a
+failure.
+
+The cap is checked against what the model is *asking for*, not what it has already spent, so
+a turn is never left half-informed. Either every tool in a round runs or none does and a
+human is asked. Answering with two thirds of the information the model said it needed is the
+failure mode worth avoiding.
+
+### The tool surface is smaller than the callable surface
+
+Five tools exist in `agent/tools.ts`; three are offered to the model. The admission test is
+whether a tool can tell the model something the prompt does not already contain.
+
+`read_facts` would return what the prompt already lists — a tool that repeats the prompt
+spends the budget to learn nothing. `write_cart` is a side effect, and side effects happen
+after the rails have judged the reply, never during: a cart written mid-loop would never be
+seen by `CART_MISMATCH` or `CART_UNANNOUNCED`, which exist precisely to catch a cart that
+disagrees with what the customer was told. The model asks for a cart the way it always has,
+in `actions`, and the loop writes it once the rails have passed.
+
+What is left — `resolve_price`, `check_availability`, `search_policy` — each reaches
+something real: the live store for the first two, and the `terms` corpus for the third,
+which retrieval deliberately excludes from the text carried every turn.
+
+### The trace is a table, not a rail event
+
+`rail_event` is `(turn_id, level, code, detail)`, and `detail` is a display string. A rail
+event is a judgement rendered on the output; a tool call is a step in a trajectory. Scoring
+a trajectory — Step 5's whole job — means querying which tools ran, in what order, with what
+arguments, and none of that fits in a string meant for a console row.
+
+So `tool_call` is its own table, with `seq`, `iteration`, arguments and result as JSON,
+provenance, and duration. It is not a parallel ledger: rail events still record that tools
+ran, the two are written against the same turn, and the console renders them together. A
+turn's cost, its rails, and the steps it took all hang off one row.
+
+### `CART_MISMATCH` got an outside opinion
+
+It compared the reply against the action — two artifacts the model produced in the same
+breath, which agree or disagree for reasons entirely internal to it.
+
+Now that the store confirms a cart, the same rail asks a question with an outside answer:
+does what we believe the cart holds match what the store says it holds. A line the store
+dropped, a quantity it clamped, or a variant it would not accept are all invisible to the
+old comparison and caught by the new one.
+
+### DeepSeek declines rather than pretends
+
+The endpoint is OpenAI-compatible and does expose function calling, but there is no key in
+this environment to verify it against, so `DeepSeekProvider.supportsTools` is `false` and a
+turn on DeepSeek takes the single constrained call. Every rail still runs. Claiming support
+that has never executed would be the same defect as §29 — a step that cannot fail loudly.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

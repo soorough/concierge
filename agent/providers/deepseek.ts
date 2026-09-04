@@ -9,6 +9,13 @@ import { costCents, type ModelRequest, type ModelResponse, type Provider } from 
  */
 export class DeepSeekProvider implements Provider {
   readonly name = 'deepseek';
+  /*
+   * The endpoint is OpenAI-compatible and does expose function calling, but none of it has
+   * been exercised here — there is no key in this environment to verify it against.
+   * Claiming support that has never run is worse than declining it: a turn on DeepSeek
+   * takes the single constrained call, which is the path every rail was built for anyway.
+   */
+  readonly supportsTools = false;
   readonly model: string;
 
   constructor(model = 'deepseek-chat') {
@@ -34,7 +41,8 @@ export class DeepSeekProvider implements Provider {
             content:
               typeof req.system === 'string' ? req.system : req.system.map((b) => b.text).join('\n\n'),
           },
-          ...req.messages,
+          // Tool exchanges never reach here — see `supportsTools`.
+          ...req.messages.map((m) => ({ role: m.role, content: m.content })),
         ],
       }),
     });
@@ -46,6 +54,8 @@ export class DeepSeekProvider implements Provider {
     const usage = { input: json.usage.prompt_tokens, output: json.usage.completion_tokens };
     return {
       text: json.choices[0]?.message?.content ?? '',
+      toolUses: [],
+      stopReason: 'end',
       inputTokens: usage.input,
       outputTokens: usage.output,
       costCents: costCents(usage, { inputPerMTok: 0.28, outputPerMTok: 0.42 }),

@@ -8,7 +8,7 @@ Verified against three deliberately different catalogs — `onehopewine.com` (97
 wines, age-gated, taste-driven), `wolftoothcomponents.com` (310 sellable bike components,
 compatibility-driven) and `transparentlabs.com` (68 sellable supplements, claim-sensitive) —
 with
-`npm run evals` (72 deterministic cases) and `npm run stress` (29 adversarial probes).
+`npm run evals` (88 deterministic cases) and `npm run stress` (29 adversarial probes).
 
 Every figure below was measured on **2026-09-04** and `npm run numbers` reprints all of them
 from source. Catalogs are live and they move: ONEHOPE was 122 products the day before this
@@ -47,7 +47,11 @@ forever.
 | Multi-turn referents | "Give me that one" resolves against what either side named earlier |
 | Policy questions | Shipping, delivery times, returns, refunds, damage, cancellation, signature requirements, minimum order, wine club — answered verbatim from the brand's own pages |
 | Shipping eligibility | "Do you ship to Utah?" answered from the brand's real state list |
-| Cart | Add, change quantity, remove, live subtotal computed from database prices |
+| Cart | Add, change quantity, remove, live subtotal computed from database prices. Where the store prices the cart, its confirmed lines are compared against ours and a disagreement withholds the checkout card |
+| Tool use | Three tools reach what the prompt cannot: the live store's price, the live store's stock, and the `terms` policy text that retrieval excludes from every turn |
+| Routed loop | A deterministic router decides per turn whether tools are worth offering. Price, availability, terms, intent to buy, or an open cart get a loop; everything else keeps the single constrained call |
+| Tool budget | Three calls per turn (`TOOL_CALL_BUDGET`), named in the prompt so the model paces itself. Asking for more ends the turn and escalates |
+| Trajectory record | Every tool call persisted with its order, arguments, result, provenance and duration, queryable and shown in the console beside that turn's own cost and latency |
 | Checkout handoff | The store prices the cart over its own MCP endpoint where available — real totals, named discounts and a genuine checkout URL — falling back to a constructed cart permalink where it is not |
 | Storefront MCP | `/api/mcp` tools discovered at ingest and recorded per brand; 3 of 4 brands tested expose cart tools, 1 exposes only policy search |
 | Age gate | Tappable in-thread confirmation on alcohol brands, gating the checkout card |
@@ -80,6 +84,8 @@ Every rail below is deterministic and fires whatever the model produced.
 | `PRICE_STALE` | A live path exists and the store did not answer, so the snapshot was quoted |
 | `STOCK_LIVE` | Availability confirmed with the store at cart-write time |
 | `STOCK_DRIFT` | The store will not sell it today — nothing is written and the turn escalates |
+| `TOOL_CALL` | One step of the turn's trajectory: which tool, with what arguments, live or local, and how long |
+| `TOOL_BUDGET_EXHAUSTED` | The model asked for more tool calls than the turn allows — the turn stops and a human is asked, rather than answering half-informed |
 | `UNGROUNDED_PRICE` | Any price the model wrote itself, digits or spelled out |
 | `UNAUTHORIZED_OFFER` | Inventing a discount. The brand's own stated promotions pass as `OFFER_AUTHORISED` |
 | `UNGROUNDED_SHIPPING_CLAIM` | Promising delivery to a place no policy mentions |
@@ -121,6 +127,7 @@ non-existent products, and absurd or negative cart quantities.
 | Authentication | A shared console password only. No accounts, roles or organisations |
 | Multi-brand workspaces | Brands are isolated by row, not by tenant |
 | Outbound messaging | The agent only replies. No campaigns, no re-engagement, no scheduling |
+| Tool use on DeepSeek | The endpoint supports function calling; it has never been run here, so the provider declines it and a DeepSeek turn takes the single constrained call. Every rail still runs |
 | Vector search | Lexical retrieval plus a full-catalog prompt. Justified in `DECISIONS.md` §1 |
 
 ### Not built yet
@@ -158,6 +165,16 @@ Things that work but are not solid, listed so they are not discovered by a custo
 - **Cart totals are list prices when the store will not price them.** Where a storefront
   exposes `update_cart` the card shows the real total and the discounts by name. Where it
   does not, the subtotal is list price and the card says promotions apply at checkout.
+- **A loop turn costs about three times a single-call turn, and takes about twice as long.**
+  Measured on ONEHOPE: 0.218¢ and 1,978ms on the single-call path against 0.65–0.75¢ and
+  3.3–4.9s with a loop. Two sequential model calls cannot happen inside two seconds. The
+  router keeps most traffic on the cheap path and the console shows the difference per turn
+  rather than averaging it away, but the `SPEC.md` §3 p50 target describes the single-call
+  path only.
+- **The tool budget is respected by persuasion, not enforcement.** The cap is hard — asking
+  for more ends the turn — but whether the model narrows to fit is a matter of it reading the
+  prompt. On a question deliberately built to strain a budget of three, three runs in four
+  narrowed and answered; the fourth over-asked and escalated.
 - **A refused cart write escalates after the fact.** Availability is checked with the store
   before the line is written, so a sold-out item never reaches a cart. But the reply has
   already been written by then, so the turn returns the generic escalation sentence rather

@@ -25,11 +25,19 @@ export type Cart = {
   pricedBy: 'store' | 'catalog';
 };
 
+export type ToolCall = {
+  seq: number; iteration: number; tool: string;
+  arguments_json: string | null; result_json: string | null;
+  source: string | null; ok: number; ms: number | null;
+};
+
 export type TurnResult = {
   turnId: string; customerId: string; reply: string | null;
   cart: Cart | null; showCheckout: boolean; needsAgeCheck: boolean;
   rails: RailEvent[]; latencyMs: number; costCents: number;
   model: string | null; provider: string | null;
+  trace: { tool: string; args: Record<string, unknown>; source: string; ok: boolean; ms: number }[];
+  modelCalls: number; route: string;
 };
 
 export type Fact = {
@@ -42,6 +50,7 @@ export type ThreadTurn = {
   payload: { card?: string } | null; created_at: number;
   latency_ms: number | null; cost_cents: number | null;
   rails: { level: string; code: string; detail: string | null }[];
+  tools: ToolCall[];
 };
 
 const PASSWORD_KEY = 'concierge.password';

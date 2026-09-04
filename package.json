@@ -17,7 +17,8 @@
     "monitor": "tsx evals/monitor.ts",
     "build:deploy": "npm run build && rm -rf console/node_modules && npm prune --omit=dev",
     "numbers": "tsx evals/numbers.ts",
-    "live": "tsx evals/live.ts"
+    "live": "tsx evals/live.ts",
+    "trace": "tsx evals/trace.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

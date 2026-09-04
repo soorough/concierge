@@ -91,7 +91,7 @@ export function App() {
     setError(null);
     setTurns((t) => [
       ...t,
-      { id: `local_${Date.now()}`, direction: 'in', text, payload: null, created_at: Date.now(), latency_ms: null, cost_cents: null, rails: [] },
+      { id: `local_${Date.now()}`, direction: 'in', text, payload: null, created_at: Date.now(), latency_ms: null, cost_cents: null, rails: [], tools: [] },
     ]);
     try {
       const r = await api.turn(brand.id, sessionId, text);

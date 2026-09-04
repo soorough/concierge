@@ -22,6 +22,10 @@ export type PromptInput = {
   offers: string[];
   restrictedRegions: string[];
   ageVerified: boolean;
+  /** True when this turn offers tools, which changes what the model is allowed to assume. */
+  tools?: boolean;
+  /** How many tool calls this turn may spend. Told to the model so it can pace itself. */
+  toolBudget?: number;
 };
 
 /**
@@ -156,6 +160,22 @@ ${offers.length ? 'These apply automatically at checkout, so the cart subtotal i
 ${restrictedRegions.length ? `\n## Restricted regions\n${restrictedRegions.join(', ')}` : ''}${
     brand.category === 'alcohol'
       ? `\n\n## Age\nThis brand sells alcohol. Age verified: ${ageVerified ? 'yes' : 'NO — ask for confirmation before any checkout.'}`
+      : ''
+  }
+${
+    opts.tools
+      ? `\n## Tools
+You can call tools before you answer. The catalog above is a snapshot taken when this brand
+was ingested, so a price or an availability in it may be out of date. Call a tool when the
+answer has to be true *now* — a budget, a comparison, a ranking, or anything the customer
+intends to buy today. Do not call one to repeat something already written above.
+
+You have **${opts.toolBudget ?? 3} tool calls** for this whole turn, and asking for more than
+that ends the turn and hands the customer to a human. So spend them on what actually decides
+your answer. If a question would need more than you have — say, checking six products one by
+one — narrow it first: pick the two or three that matter and answer from those, or ask the
+customer a question that narrows it for you.
+`
       : ''
   }
 ## Output

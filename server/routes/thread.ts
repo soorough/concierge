@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../store/db.js';
-import { getOrCreateCustomer, recentTurns, railEventsFor } from '../../store/session.js';
+import { getOrCreateCustomer, recentTurns, railEventsFor, toolCallsFor } from '../../store/session.js';
 import { runTurn } from '../../agent/loop.js';
 import { getCartPriced, setQty, clearCart } from '../../agent/cart.js';
 import { currentFacts, allFacts, writeFact } from '../../store/ledger.js';
@@ -45,13 +45,18 @@ export async function registerThreadRoutes(app: FastifyInstance) {
       }
       const customer = getOrCreateCustomer(brandId, sessionId);
       const turns = recentTurns(customer.id, 100);
-      const rails = railEventsFor(turns.map((t) => t.id));
+      const turnIds = turns.map((t) => t.id);
+      const rails = railEventsFor(turnIds);
+      // The trajectory travels with the turn, so the console can put what the agent did
+      // beside what it cost.
+      const tools = toolCallsFor(turnIds);
       return {
         customer,
         turns: turns.map((t) => ({
           ...t,
           payload: t.payload_json ? JSON.parse(t.payload_json) : null,
           rails: rails.filter((r) => r.turn_id === t.id),
+          tools: tools.filter((c) => c.turn_id === t.id),
         })),
       };
     },

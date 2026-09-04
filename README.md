@@ -82,22 +82,35 @@ supersedes the note and keeps both visible.
         │
   ingest ────► catalog + policies + brand ──► SQLite      currency validated, chrome stripped
         │
-  a message ─► pre-rails ─► retrieval ─► one model call ─► live lookup ─► post-rails ─► side effects
-                  │              │              │                │              │
-             no model call   whole catalog   live prices     price and      35 deterministic
-             for STOP/HELP   policy, cached  warmed here    stock, from     checks on the output
-                                                            the store
+  a message ─► pre-rails ─► retrieval ─► route ─┬─► one model call ──────────┐
+                  │              │              │                            │
+             no model call   whole catalog      └─► model ⇄ tools ───────────┤
+             for STOP/HELP   policy, cached         budget 3, then escalate  │
+                                                                             ▼
+                                              live lookup ─► post-rails ─► side effects
+                                                   │              │
+                                            price and stock   37 deterministic
+                                            from the store    checks on the output
 ```
 
-One turn is retrieval plus a single model call. Ingest never runs on the turn path. The
-catalog and the brand's policy pages are identical every turn, so they are cached — which is
-what makes sending the *whole* catalog affordable, and sending the whole catalog is what
-makes semantic matching work without a vector database.
+The router is deterministic. A question the catalog already answers takes one constrained
+model call, which is most traffic. A question about a price, stock, terms, or an intent to
+buy gets a loop with a budget of three tool calls — and the turn records what it called, in
+what order, beside what it cost.
+
+Ingest never runs on the turn path. The catalog and the brand's policy pages are identical
+every turn, so they are cached — which is what makes sending the *whole* catalog affordable,
+and sending the whole catalog is what makes semantic matching work without a vector
+database.
 
 The cached catalog is what the agent *reasons* over. What it *commits* to — the price it
 quotes and the line it writes to a cart — is read from the live storefront at the moment of
 use, because a snapshot is true on ingest day and drifts from there. Those lookups start
 while the model is still answering, so they cost the turn nothing. `DECISIONS.md` §30.
+
+A loop turn costs about three times a single-call turn and takes about twice as long, since
+two sequential model calls cannot happen inside two seconds. That is shown per turn rather
+than averaged away. `DECISIONS.md` §31.
 
 ---
 
@@ -112,8 +125,9 @@ npm run restart               # builds the console, serves both on :3000
 
 | Command | What it does |
 |---|---|
-| `npm run evals` | 72 deterministic tests. No API key needed — the rails and ledger are pure logic |
+| `npm run evals` | 88 deterministic tests. No API key needed — the rails, ledger, router and cart check are pure logic |
 | `npm run live` | Asks a real ingested storefront for a real price, and checks the drift rail against it. Network, no API key |
+| `npm run trace` | Runs four real turns and prints which took one model call, which earned a loop, what the loop did, and what each cost. **Spends money** |
 | `npm run stress` | 29 adversarial probes against a running agent |
 | `npm run monitor` | Live health against written-down service levels; exits non-zero on a breach |
 | `npm run numbers` | Reprints every figure quoted in these documents, from source |

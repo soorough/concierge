@@ -67,6 +67,65 @@ export function recordRailEvent(turnId: string, level: 'pass' | 'warn' | 'block'
     .run(id('rail'), turnId, level, code, detail ?? null);
 }
 
+export type ToolCallRow = {
+  id: string;
+  turn_id: string;
+  seq: number;
+  iteration: number;
+  tool: string;
+  arguments_json: string | null;
+  result_json: string | null;
+  source: string | null;
+  ok: number;
+  ms: number | null;
+  created_at: number;
+};
+
+/**
+ * One step of a turn's trajectory.
+ *
+ * Written even when the tool failed, and even when the budget then ran out. A trace that
+ * only records what worked cannot answer the question Step 5 exists to ask, which is
+ * whether the agent went about it the right way.
+ */
+export function recordToolCall(row: {
+  turnId: string;
+  seq: number;
+  iteration: number;
+  tool: string;
+  args: unknown;
+  result: string;
+  source: string;
+  ok: boolean;
+  ms: number;
+}) {
+  getDb()
+    .prepare(
+      `insert into tool_call
+       (id, turn_id, seq, iteration, tool, arguments_json, result_json, source, ok, ms, created_at)
+       values (?,?,?,?,?,?,?,?,?,?,?)`,
+    )
+    .run(
+      id('tool'),
+      row.turnId,
+      row.seq,
+      row.iteration,
+      row.tool,
+      JSON.stringify(row.args ?? {}),
+      row.result.slice(0, 2000),
+      row.source,
+      row.ok ? 1 : 0,
+      row.ms,
+      Date.now(),
+    );
+}
+
+export function toolCallsFor(turnIds: string[]): ToolCallRow[] {
+  if (!turnIds.length) return [];
+  const q = `select * from tool_call where turn_id in (${turnIds.map(() => '?').join(',')}) order by seq`;
+  return getDb().prepare(q).all(...turnIds) as ToolCallRow[];
+}
+
 export function railEventsFor(turnIds: string[]) {
   if (!turnIds.length) return [];
   const q = `select * from rail_event where turn_id in (${turnIds.map(() => '?').join(',')})`;

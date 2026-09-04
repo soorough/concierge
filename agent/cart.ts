@@ -19,6 +19,14 @@ export type CartView = {
   permalink: string | null;
   /** 'store' when the store priced it, 'catalog' when we constructed the handoff. */
   pricedBy: 'store' | 'catalog';
+  /**
+   * The lines the store says are in the cart, when the store told us.
+   *
+   * Kept separate from `lines`, which is ours. Holding both is what lets a rail compare
+   * what we believe against what the store confirmed, rather than comparing two things we
+   * produced ourselves.
+   */
+  storeLines?: { variantId: string; quantity: number }[];
   /** Why the store did not price it, when it did not. */
   pricingNote?: string;
 };
@@ -124,6 +132,8 @@ export async function getCartPriced(
       discounts: JSON.parse(row.remote_discounts_json ?? '[]'),
       permalink: row.permalink ?? local.permalink,
       pricedBy: 'store',
+      // Unchanged contents were confirmed by the store when the signature was stored.
+      storeLines: local.lines.map((l) => ({ variantId: l.variant_id ?? '', quantity: l.qty })),
     };
   }
 
@@ -155,7 +165,44 @@ export async function getCartPriced(
     discounts: priced.discounts,
     permalink: priced.checkoutUrl,
     pricedBy: 'store',
+    storeLines: priced.lines.map((l) => ({ variantId: l.variantId, quantity: l.quantity })),
   };
+}
+
+/** Shopify returns a `gid://shopify/ProductVariant/123` where our catalog holds `123`. */
+export const variantKey = (id: string | null): string => (id ?? '').split('/').pop() ?? '';
+
+/**
+ * What we believe the cart holds, against what the store says it holds.
+ *
+ * `CART_MISMATCH` used to compare the reply against the action, which are two things the
+ * model produced in the same breath — they agree or disagree for reasons entirely internal
+ * to it. Now that a cart write is confirmed by the store, correctness becomes a question
+ * with an outside answer: an item the store dropped, a quantity it clamped, or a variant it
+ * would not accept all show up here and nowhere else.
+ */
+export function cartDisagreement(cart: CartView): string | null {
+  if (cart.pricedBy !== 'store' || !cart.storeLines) return null;
+
+  const store = new Map(cart.storeLines.map((l) => [variantKey(l.variantId), l.quantity]));
+  const problems: string[] = [];
+
+  for (const line of cart.lines) {
+    const key = variantKey(line.variant_id);
+    if (!key) continue;
+    const confirmed = store.get(key);
+    if (confirmed === undefined) {
+      problems.push(`${line.title} is not in the store's cart`);
+    } else if (confirmed !== line.qty) {
+      problems.push(`${line.title}: we say ${line.qty}, the store says ${confirmed}`);
+    }
+    store.delete(key);
+  }
+  for (const [key, qty] of store) {
+    problems.push(`the store's cart holds an extra variant ${key} x${qty}`);
+  }
+
+  return problems.length ? problems.join('; ') : null;
 }
 
 export function getCart(customerId: string, domain: string, ingestPath: string): CartView {
