@@ -98,7 +98,7 @@ export type Metrics = {
 
 export type Health = {
   ok: boolean;
-  storage: { path: string; persistent: boolean; warning?: string };
+  storage: { path: string; persistent: boolean; reason: string };
 };
 
 export const api = {

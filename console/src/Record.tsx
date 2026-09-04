@@ -100,8 +100,7 @@ export function Record({
               <span className="code">NOT PERSISTENT</span>
               <span className="detail">
                 {' '}
-                {health.storage.path} is inside the working directory and is erased on every
-                deploy. Point DB_PATH at a mounted volume.
+                {health.storage.reason}
               </span>
             </span>
           </div>

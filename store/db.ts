@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,18 +15,57 @@ export function dbPath(): string {
   return resolve(process.env.DB_PATH ?? DEFAULT_DB_PATH);
 }
 
+export type StorageCheck = {
+  path: string;
+  persistent: boolean;
+  reason: string;
+};
+
 /**
- * Whether the database is somewhere a deploy will not erase.
+ * Whether the database sits on a real mounted volume.
  *
- * A relative DB_PATH puts the file inside the container image, which looks completely
- * healthy and loses every brand and every conversation on the next deploy — the volume can
- * be mounted correctly and still be unused. This turns that into something visible rather
- * than something discovered later by noticing data missing.
+ * Checking that the path merely looks right is not enough, and this was learned the hard
+ * way: DB_PATH was an absolute /data/concierge.db, the check reported persistent, three
+ * brands were ingested — and the next deploy took them. If no volume is mounted there, the
+ * process simply creates /data as an ordinary directory inside the container, which is
+ * indistinguishable by path alone.
+ *
+ * A mount has its own device. Comparing the device id of the database's directory against
+ * the root filesystem answers the real question rather than the cosmetic one.
  */
-export function storageIsPersistent(): boolean {
+export function checkStorage(): StorageCheck {
   const configured = process.env.DB_PATH;
-  if (!configured) return false;
-  return isAbsolute(configured) && !resolve(configured).startsWith(resolve(process.cwd()));
+  const path = dbPath();
+
+  if (!configured) {
+    return { path, persistent: false, reason: 'DB_PATH is unset, so the database is inside the container' };
+  }
+  if (!isAbsolute(configured)) {
+    return {
+      path,
+      persistent: false,
+      reason: `DB_PATH "${configured}" is relative, so it resolves inside the working directory and is erased on the next deploy`,
+    };
+  }
+
+  try {
+    const dir = dirname(path);
+    mkdirSync(dir, { recursive: true });
+    const onVolume = statSync(dir).dev !== statSync('/').dev;
+    return onVolume
+      ? { path, persistent: true, reason: 'on a mounted volume' }
+      : {
+          path,
+          persistent: false,
+          reason: `${dir} is on the same device as the container filesystem — no volume is mounted there, so a deploy erases it`,
+        };
+  } catch (e) {
+    return { path, persistent: false, reason: `could not stat the database directory: ${(e as Error).message}` };
+  }
+}
+
+export function storageIsPersistent(): boolean {
+  return checkStorage().persistent;
 }
 
 export function getDb(): DB {
