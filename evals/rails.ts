@@ -1,4 +1,10 @@
-import { runPostRails, parseModelOutput, type ModelOutput, type PostRailContext } from '../agent/rails/post.js';
+import {
+  runPostRails,
+  parseModelOutput,
+  type ModelOutput,
+  type PostRailContext,
+  type LivePriceEntry,
+} from '../agent/rails/post.js';
 import type { RetrievedProduct } from '../agent/retrieve.js';
 
 export type Case = { name: string; run: () => { pass: boolean; got: string } };
@@ -52,6 +58,17 @@ const out = (over: Partial<ModelOutput> = {}): ModelOutput => ({
 });
 
 const fired = (events: { code: string }[], code: string) => events.some((e) => e.code === code);
+const firedAt = (events: { code: string; level: string }[], code: string, level: string) =>
+  events.some((e) => e.code === code && e.level === level);
+
+/** One live price for the Vintner Cab, whose snapshot price is $29.00. */
+const livePrice = (over: Partial<LivePriceEntry> = {}): Map<string, LivePriceEntry> =>
+  new Map([
+    [
+      'prod_1',
+      { priceCents: 2900, source: 'live', driftCents: 0, suspect: false, stale: false, ...over },
+    ],
+  ]);
 const codes = (events: { code: string }[]) => events.map((e) => e.code).join(',') || '(none)';
 
 export const RAIL_CASES: Case[] = [
@@ -82,6 +99,94 @@ export const RAIL_CASES: Case[] = [
     run: () => {
       const r = runPostRails(out({ reply: 'It is {{price:9}}.' }), ctx());
       return { pass: fired(r.events, 'UNGROUNDED_PRICE') && r.escalated, got: r.reply };
+    },
+  },
+
+  // --- live truth
+  {
+    name: 'a live price is quoted in place of the ingest snapshot',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'The Vintner Cab is {{price:1}}.' }),
+        ctx({ livePrices: livePrice({ priceCents: 3400, driftCents: -500 }) }),
+      );
+      return {
+        pass: r.reply.includes('$34.00') && !r.reply.includes('$29.00'),
+        got: r.reply,
+      };
+    },
+  },
+  {
+    name: 'a live lookup that agrees with the snapshot is still recorded as live',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'The Vintner Cab is {{price:1}}.' }),
+        ctx({ livePrices: livePrice() }),
+      );
+      return {
+        pass: fired(r.events, 'PRICE_LIVE') && !fired(r.events, 'PRICE_DRIFT') && !r.escalated,
+        got: codes(r.events),
+      };
+    },
+  },
+  {
+    name: 'a brand that has repriced since ingest is reported, not hidden',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'The Vintner Cab is {{price:1}}.' }),
+        ctx({ livePrices: livePrice({ priceCents: 3400, driftCents: -500 }) }),
+      );
+      return {
+        pass: firedAt(r.events, 'PRICE_DRIFT', 'warn') && !r.escalated,
+        got: codes(r.events),
+      };
+    },
+  },
+  {
+    name: 'a drift of an order of magnitude quotes neither number',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'The Vintner Cab is {{price:1}}.' }),
+        ctx({
+          livePrices: livePrice({ priceCents: 240_000, driftCents: -237_100, suspect: true }),
+        }),
+      );
+      return {
+        pass:
+          firedAt(r.events, 'PRICE_DRIFT', 'block') &&
+          r.escalated &&
+          !r.reply.includes('$2,400.00') &&
+          !r.reply.includes('$29.00'),
+        got: `${codes(r.events)} :: ${r.reply}`,
+      };
+    },
+  },
+  {
+    name: 'a store that did not answer is quoted from the snapshot and says so',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: 'The Vintner Cab is {{price:1}}.' }),
+        ctx({
+          livePrices: livePrice({ source: 'snapshot', driftCents: null, stale: true }),
+        }),
+      );
+      return {
+        pass: r.reply.includes('$29.00') && fired(r.events, 'PRICE_STALE') && !r.escalated,
+        got: `${codes(r.events)} :: ${r.reply}`,
+      };
+    },
+  },
+  {
+    name: 'a brand with no live path prices from the snapshot without a stale warning',
+    run: () => {
+      const r = runPostRails(out({ reply: 'The Vintner Cab is {{price:1}}.' }), ctx());
+      return {
+        pass:
+          r.reply.includes('$29.00') &&
+          !fired(r.events, 'PRICE_STALE') &&
+          !fired(r.events, 'PRICE_LIVE'),
+        got: `${codes(r.events)} :: ${r.reply}`,
+      };
     },
   },
 

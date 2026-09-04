@@ -8,7 +8,7 @@ Verified against three deliberately different catalogs — `onehopewine.com` (97
 wines, age-gated, taste-driven), `wolftoothcomponents.com` (310 sellable bike components,
 compatibility-driven) and `transparentlabs.com` (68 sellable supplements, claim-sensitive) —
 with
-`npm run evals` (66 deterministic cases) and `npm run stress` (29 adversarial probes).
+`npm run evals` (72 deterministic cases) and `npm run stress` (29 adversarial probes).
 
 Every figure below was measured on **2026-09-04** and `npm run numbers` reprints all of them
 from source. Catalogs are live and they move: ONEHOPE was 122 products the day before this
@@ -41,7 +41,7 @@ forever.
 
 | Capability | Notes |
 |---|---|
-| Product questions | Prices, styles, tasting notes, availability — from the live catalog |
+| Product questions | Prices, styles, tasting notes, availability. Quoted prices and cart writes are read from the live storefront at the moment of use; everything else is reasoned over the ingested catalog |
 | Semantic matching | "Something that goes with ribeye", "a gift for my mum who likes sweet things", "what to bring to a beach picnic" |
 | Price rankings | "What's your cheapest" answered from a price-ordered catalog, not guessed |
 | Multi-turn referents | "Give me that one" resolves against what either side named earlier |
@@ -74,7 +74,12 @@ Every rail below is deterministic and fires whatever the model produced.
 
 | Rail | What it prevents |
 |---|---|
-| `PRICE_RESOLVED` | Prices come from the database; the model emits a token |
+| `PRICE_RESOLVED` | Prices come from the database or the store; the model emits a token |
+| `PRICE_LIVE` | The quoted price was read from the live storefront, not the ingest snapshot |
+| `PRICE_DRIFT` | The store has repriced since ingest — the live number is quoted and the gap logged. An order-of-magnitude gap quotes neither and escalates |
+| `PRICE_STALE` | A live path exists and the store did not answer, so the snapshot was quoted |
+| `STOCK_LIVE` | Availability confirmed with the store at cart-write time |
+| `STOCK_DRIFT` | The store will not sell it today — nothing is written and the turn escalates |
 | `UNGROUNDED_PRICE` | Any price the model wrote itself, digits or spelled out |
 | `UNAUTHORIZED_OFFER` | Inventing a discount. The brand's own stated promotions pass as `OFFER_AUTHORISED` |
 | `UNGROUNDED_SHIPPING_CLAIM` | Promising delivery to a place no policy mentions |
@@ -131,6 +136,8 @@ Other gaps:
 | Gap | Consequence |
 |---|---|
 | Crawl adapter | Non-Shopify brands classify as `crawl` and then stop. Only Shopify ingests end to end |
+| Live truth on non-Shopify brands | The live price and stock lookup is a Shopify endpoint. A crawled brand prices from the snapshot, and `PRICE_STALE` says so rather than implying a check happened |
+| Live lookup outside the warmed set | The four lexically closest products are warmed while the model thinks, so the lookup is free. A reply quoting something outside that set pays roughly 300ms |
 | WAF-protected sites | Summit Racing, CarID, FCP Euro and McMaster are refused by design, with the wall named |
 | Catalogs over ~400 products | Falls back to a lexical slice, and semantic matching degrades accordingly |
 | Headless and custom storefronts | Not covered by either adapter |
@@ -151,6 +158,10 @@ Things that work but are not solid, listed so they are not discovered by a custo
 - **Cart totals are list prices when the store will not price them.** Where a storefront
   exposes `update_cart` the card shows the real total and the discounts by name. Where it
   does not, the subtotal is list price and the card says promotions apply at checkout.
+- **A refused cart write escalates after the fact.** Availability is checked with the store
+  before the line is written, so a sold-out item never reaches a cart. But the reply has
+  already been written by then, so the turn returns the generic escalation sentence rather
+  than a reply that reflects what happened.
 - **Derived delivery estimates.** "1–3 days processing plus 3–7 days shipping, so roughly
   6–10 business days" is arithmetic, not policy. The delivery rail checks that the numbers
   appear in the policy text, which a derived figure can satisfy coincidentally.

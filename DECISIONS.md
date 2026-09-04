@@ -455,6 +455,83 @@ than a mount, the schema that applied only to empty databases, the probes that s
 fabricated policy as clean. A step that cannot fail loudly will eventually fail quietly, and
 the tooling used to build the guardrails deserves the same suspicion as the guardrails.
 
+## 30. A cached catalog is a performance decision, not a correctness one
+
+The catalog is read once at ingest, so a price is true on ingest day and drifts from there.
+The whole catalog is then sent in one cached block, which is why a turn costs about a third
+of a cent and answers in under two seconds.
+
+Those two facts got conflated. The cheap cached block is worth keeping and the stale number
+is not, and the way to have both is to notice that they serve different questions. "What
+goes with a ribeye" is reasoning over the catalog, needs no live data, and is most of the
+traffic. "How much is it" and "add it to my cart" are commitments, and a commitment made
+against a snapshot is a commitment the store never agreed to.
+
+So: **cached catalog for reasoning, live call for committing.** The live call happens at the
+two points where we commit — the price substitution and the cart write — and nowhere else.
+
+The transport is `/products/{handle}.js`, Shopify's AJAX endpoint, in preference to
+`/products/{handle}.json`. The `.json` form omits `available` entirely, so it cannot answer
+the stock half of the question, and it returns prices as decimal strings where `.js` returns
+integer cents. Parsing money out of a string is how rounding bugs get in. The MCP endpoint
+already prices whole carts (§27); this is the per-product lookup it does not offer.
+
+**The model still never writes a price.** That was the load-bearing property and it is
+untouched: the model emits `{{price:N}}`, and something that is not the model substitutes a
+number. All that changed is where that something reads from.
+
+### Drift is reported, and only sometimes refused
+
+Every disagreement between the snapshot and the store is logged as `PRICE_DRIFT`, and the
+live number is the one the customer hears. A brand that reprices is not an error.
+
+A gap of an order of magnitude is different: there, we cannot tell which number is real, so
+the reply quotes neither and asks for a human. That threshold is set from the defect that
+actually happened. Ingesting a US brand from India returned INR, and $14.95 arrived as
+1500.00 — a hundredfold gap. A twofold gap is a sale; a hundredfold gap is a broken pipe.
+Blocking at a tighter tolerance would refuse genuine discounts, which §26 already establishes
+is also a wrong answer.
+
+### The latency is hidden, not spent
+
+A live lookup is about 300ms against a healthy storefront, which would have taken a
+price-quoting turn past the 2s p50 the whole system is held to.
+
+It does not, because the lookup starts before the model is asked rather than after it
+answers. Retrieval already knows which products are lexically closest to the question, and a
+reply that quotes a price nearly always quotes one of those, so the four closest are warmed
+concurrently with the model call. Measured: 0ms for the real lookup at model durations of
+700ms, 900ms and 1,100ms. A turn quoting something outside that set pays the round trip
+honestly, and the first turn in a fresh process pays for DNS and TLS.
+
+Four is a deliberate ceiling. This is somebody else's storefront, and warming their whole
+catalog on every turn to save 300ms on some of them is not a trade we are entitled to make.
+
+### The rails stayed synchronous
+
+The obvious implementation puts the network call inside the price rail. That would have made
+`runPostRails` async and dragged a fetch into the one part of the system that currently runs
+with no network, no API key and no clock — which is exactly why 72 deterministic tests can
+run in a second and be believed.
+
+Instead the lookups happen in the turn loop, between the model call and the rails, and the
+rails receive a map of what the store said. The rails are told facts about the live store;
+they do not go and get them. The new cases test drift, suspect drift, and a store that did
+not answer, all without a network.
+
+### What this does not fix
+
+Only Shopify brands have a live path. A crawled brand prices from the snapshot, and
+`PRICE_STALE` distinguishes "we asked and got no answer" from "there was nobody to ask" so
+the console does not imply a check that never happened.
+
+A cart write now asks the store whether the item can still be sold and refuses to write when
+it cannot, which turns an incompletable checkout into an escalation. But the reply already
+said the item was added by the time we find out, so the turn escalates rather than shipping a
+sentence the cart disagrees with. Comparing what the agent said against what the store
+confirmed — rather than against what the agent itself did — is the stronger version of
+`CART_MISMATCH`, and it wants the loop before it is worth building properly.
+
 ## What I'd change with a month
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a

@@ -39,8 +39,15 @@ console.log(
 );
 console.log(`    adversarial probes    ${PROBES.length}   ${dim('npm run stress')}`);
 
+/*
+ * Every file that can emit one, not only the two rail files. The turn loop raises rails of
+ * its own — the fact ledger's, and the store's answer on availability — and a counter that
+ * reads two files reports a number that was true when it was written.
+ */
 const railCodes = new Set(
-  (readFileSync('agent/rails/post.ts', 'utf8') + readFileSync('agent/rails/pre.ts', 'utf8'))
+  ['agent/rails/post.ts', 'agent/rails/pre.ts', 'agent/loop.ts', 'agent/limits.ts']
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n')
     .match(/code: '([A-Z_]+)'/g)
     ?.map((m) => m.slice(7, -1)) ?? [],
 );

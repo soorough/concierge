@@ -82,16 +82,22 @@ supersedes the note and keeps both visible.
         │
   ingest ────► catalog + policies + brand ──► SQLite      currency validated, chrome stripped
         │
-  a message ─► pre-rails ─► retrieval ─► one model call ─► post-rails ─► side effects
-                  │              │                              │
-             no model call   whole catalog +              20+ deterministic
-             for STOP/HELP   policy, cached                checks on the output
+  a message ─► pre-rails ─► retrieval ─► one model call ─► live lookup ─► post-rails ─► side effects
+                  │              │              │                │              │
+             no model call   whole catalog   live prices     price and      35 deterministic
+             for STOP/HELP   policy, cached  warmed here    stock, from     checks on the output
+                                                            the store
 ```
 
 One turn is retrieval plus a single model call. Ingest never runs on the turn path. The
 catalog and the brand's policy pages are identical every turn, so they are cached — which is
 what makes sending the *whole* catalog affordable, and sending the whole catalog is what
 makes semantic matching work without a vector database.
+
+The cached catalog is what the agent *reasons* over. What it *commits* to — the price it
+quotes and the line it writes to a cart — is read from the live storefront at the moment of
+use, because a snapshot is true on ingest day and drifts from there. Those lookups start
+while the model is still answering, so they cost the turn nothing. `DECISIONS.md` §30.
 
 ---
 
@@ -106,7 +112,8 @@ npm run restart               # builds the console, serves both on :3000
 
 | Command | What it does |
 |---|---|
-| `npm run evals` | 66 deterministic tests. No API key needed — the rails and ledger are pure logic |
+| `npm run evals` | 72 deterministic tests. No API key needed — the rails and ledger are pure logic |
+| `npm run live` | Asks a real ingested storefront for a real price, and checks the drift rail against it. Network, no API key |
 | `npm run stress` | 29 adversarial probes against a running agent |
 | `npm run monitor` | Live health against written-down service levels; exits non-zero on a breach |
 | `npm run numbers` | Reprints every figure quoted in these documents, from source |

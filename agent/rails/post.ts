@@ -77,6 +77,33 @@ export type PostRailContext = {
   priceOrdered?: boolean;
   /** Policy text actually retrieved this turn, used to ground policy assertions. */
   policyText?: string;
+  /**
+   * What the store said about these products a moment ago, keyed by product id.
+   *
+   * Absent entirely on a brand with no live path, so an unset map means "snapshot only"
+   * rather than "live lookup failed". The rails prefer a live number wherever one exists
+   * and report the difference either way.
+   */
+  livePrices?: Map<string, LivePriceEntry>;
+  /**
+   * Wall clock the live lookups cost this turn.
+   *
+   * Latency is a product feature here, so a turn that got slower has to say why in the same
+   * place the reader is already looking rather than in a log nobody opens.
+   */
+  liveLookupMs?: number;
+};
+
+/** One product's live price, as resolved before the rails ran. */
+export type LivePriceEntry = {
+  priceCents: number;
+  source: 'live' | 'snapshot';
+  /** Snapshot minus live, in cents. Null when no live number came back. */
+  driftCents: number | null;
+  /** The two numbers are an order of magnitude apart, so neither can be trusted. */
+  suspect: boolean;
+  /** A live path exists and the store did not answer. */
+  stale: boolean;
 };
 
 export type PostRailResult = {
@@ -90,7 +117,7 @@ export type PostRailResult = {
 };
 
 /** Used when a rail blocked the reply, so its content cannot be trusted at all. */
-const ESCALATION_REPLY =
+export const ESCALATION_REPLY =
   "I don't want to guess on that one — let me get someone from the team to confirm.";
 
 /** Appended when the model itself asked for a human but its reply survived every rail. */
@@ -185,9 +212,22 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
   let escalated = false;
   let blockCheckout = false;
 
-  // 1. Price resolution — the model emits a token, the database supplies the number.
+  /*
+   * 1. Price resolution — the model emits a token, and something other than the model
+   * supplies the number. That was the database alone; it is now the store where the store
+   * will answer, and the database where it will not.
+   *
+   * The substitution stays the only place a price enters a reply, which is what makes a
+   * hallucinated price structurally impossible. Changing where the number comes from does
+   * not weaken that: the model still never writes one.
+   */
   let resolved = 0;
+  let fromLive = 0;
+  let stale = 0;
+  const drifted: { product: RetrievedProduct; live: LivePriceEntry }[] = [];
+  const suspect: { product: RetrievedProduct; live: LivePriceEntry }[] = [];
   const unknownTokens: string[] = [];
+
   reply = reply.replace(/\{\{price:([^}]+)\}\}/g, (_match, rawRef: string) => {
     const product = index.get(rawRef.trim().toLowerCase());
     if (!product) {
@@ -195,11 +235,67 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
       return '';
     }
     resolved++;
-    return formatMoney(product.price_cents, ctx.currency ?? product.currency ?? 'USD');
+
+    const live = ctx.livePrices?.get(product.id);
+    if (live?.stale) stale++;
+    if (live?.source === 'live') {
+      fromLive++;
+      if (live.suspect) suspect.push({ product, live });
+      else if (live.driftCents) drifted.push({ product, live });
+    }
+
+    /*
+     * A suspect price quotes neither number. Where the two disagree by an order of
+     * magnitude one of them is wrong and we cannot tell which, so the reply is held and a
+     * human is asked rather than the customer being given a coin flip.
+     */
+    const priceCents = live?.source === 'live' && !live.suspect ? live.priceCents : product.price_cents;
+    return formatMoney(priceCents, ctx.currency ?? product.currency ?? 'USD');
   });
 
   if (resolved) {
-    events.push({ level: 'pass', code: 'PRICE_RESOLVED', detail: `${resolved} token(s) from DB` });
+    events.push({
+      level: 'pass',
+      code: 'PRICE_RESOLVED',
+      detail: `${resolved} token(s) resolved`,
+    });
+  }
+  if (fromLive) {
+    events.push({
+      level: 'pass',
+      code: 'PRICE_LIVE',
+      detail:
+        `${fromLive} of ${resolved} price(s) read from the live store` +
+        (ctx.liveLookupMs === undefined ? '' : ` in ${ctx.liveLookupMs}ms`),
+    });
+  }
+  if (stale) {
+    events.push({
+      level: 'warn',
+      code: 'PRICE_STALE',
+      detail: `${stale} price(s) quoted from the ingest snapshot — the store did not answer`,
+    });
+  }
+  for (const { product, live } of drifted) {
+    const currency = ctx.currency ?? product.currency ?? 'USD';
+    events.push({
+      level: 'warn',
+      code: 'PRICE_DRIFT',
+      detail:
+        `${product.title}: snapshot ${formatMoney(product.price_cents, currency)}, ` +
+        `live ${formatMoney(live.priceCents, currency)} — quoted live`,
+    });
+  }
+  for (const { product, live } of suspect) {
+    escalated = true;
+    const currency = ctx.currency ?? product.currency ?? 'USD';
+    events.push({
+      level: 'block',
+      code: 'PRICE_DRIFT',
+      detail:
+        `${product.title}: snapshot ${formatMoney(product.price_cents, currency)} against ` +
+        `live ${formatMoney(live.priceCents, currency)} — an order of magnitude apart, quoting neither`,
+    });
   }
   if (unknownTokens.length) {
     escalated = true;

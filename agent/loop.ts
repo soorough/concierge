@@ -4,9 +4,16 @@ import { writeFact } from '../store/ledger.js';
 import { retrieve, type RetrievedProduct } from './retrieve.js';
 import { buildSystemBlocks } from './prompt.js';
 import { runPreRails } from './rails/pre.js';
-import { runPostRails, parseModelOutput, type ModelAction } from './rails/post.js';
+import {
+  runPostRails,
+  parseModelOutput,
+  ESCALATION_REPLY,
+  type ModelAction,
+  type LivePriceEntry,
+} from './rails/post.js';
+import { resolvePrice, checkAvailability, writeCart, hasLivePath } from './tools.js';
 import { getProvider } from './providers/index.js';
-import { addToCart, getCartPriced, type CartView } from './cart.js';
+import { getCartPriced, type CartView } from './cart.js';
 import { checkTurnAllowed, recordSpend } from './limits.js';
 import type { StoredBrand } from '../store/queries.js';
 import type { RailEvent } from './rails/types.js';
@@ -46,8 +53,93 @@ function nonSellableSkus(brandId: string): Set<string> {
   return new Set(rows.map((r) => (r.sku ?? r.id).toLowerCase()));
 }
 
+
+/*
+ * How many products to warm before the model has chosen any.
+ *
+ * The model takes roughly a second to answer and the store answers in about half of one, so
+ * the live lookup is free if it is started early enough. Retrieval already knows which
+ * products are lexically closest to the question, and a reply that quotes a price almost
+ * always quotes one of those.
+ *
+ * Kept small on purpose: this is somebody else's storefront, and warming their whole catalog
+ * on every turn to save 500ms on some of them is not a trade we are entitled to make.
+ */
+const PREFETCH_LIMIT = 4;
+
 /**
- * One turn: rails, retrieval, one model call, rails, side effects.
+ * Warm the live cache while the model is still thinking.
+ *
+ * Deliberately not awaited. A prefetch that fails, times out, or finishes after the model
+ * costs the turn nothing — the real lookup simply pays its own round trip, exactly as it
+ * would have. Nothing downstream reads this promise.
+ */
+function prefetchLive(brand: StoredBrand, retrieval: { products: RetrievedProduct[]; detailed: Set<string>; cartProducts: RetrievedProduct[] }): void {
+  if (!hasLivePath(brand.ingest_path)) return;
+
+  const closest = retrieval.products.filter((p) => retrieval.detailed.has(p.id)).slice(0, PREFETCH_LIMIT);
+  const warm = [...retrieval.cartProducts, ...closest].slice(0, PREFETCH_LIMIT + retrieval.cartProducts.length);
+
+  for (const product of warm) {
+    void checkAvailability({ domain: brand.domain, ingestPath: brand.ingest_path, product }).catch(
+      () => undefined,
+    );
+  }
+}
+
+/** Every distinct product the model asked us to price in this reply. */
+const PRICE_TOKEN = /\{\{price:([^}]+)\}\}/g;
+
+/**
+ * Ask the store what these cost, before the rails decide what may be said.
+ *
+ * This runs between the model call and the rails rather than inside them, which keeps
+ * `runPostRails` synchronous and pure — the property the deterministic suite depends on,
+ * since it runs the rails with no network and no API key. The rails receive facts about the
+ * live store; they do not go and get them.
+ *
+ * Lookups are issued together, so a reply quoting three wines costs one round trip's
+ * latency, not three.
+ */
+async function resolveLivePrices(
+  brand: StoredBrand,
+  reply: string,
+  catalog: RetrievedProduct[],
+): Promise<{ prices: Map<string, LivePriceEntry>; ms: number }> {
+  const prices = new Map<string, LivePriceEntry>();
+  if (!reply) return { prices, ms: 0 };
+
+  const index = buildIndex(catalog);
+  const wanted = new Map<string, RetrievedProduct>();
+  for (const [, ref] of reply.matchAll(PRICE_TOKEN)) {
+    const product = index.get(ref.trim().toLowerCase());
+    if (product) wanted.set(product.id, product);
+  }
+  if (!wanted.size) return { prices, ms: 0 };
+
+  const started = Date.now();
+  const results = await Promise.all(
+    [...wanted.values()].map((product) =>
+      resolvePrice({ domain: brand.domain, ingestPath: brand.ingest_path, product }),
+    ),
+  );
+
+  results.forEach((result, i) => {
+    const product = [...wanted.values()][i];
+    prices.set(product.id, {
+      priceCents: result.value.priceCents,
+      source: result.source === 'live' ? 'live' : 'snapshot',
+      driftCents: result.value.driftCents,
+      suspect: result.value.suspect,
+      stale: result.source !== 'live' && hasLivePath(brand.ingest_path),
+    });
+  });
+
+  return { prices, ms: Date.now() - started };
+}
+
+/**
+ * One turn: rails, retrieval, one model call, live lookups, rails, side effects.
  *
  * Ingest never runs here, and there is no second model call on the turn path — fact
  * extraction rides along in the same response rather than costing another round trip.
@@ -142,6 +234,13 @@ export async function runTurn(opts: {
       content: t.text!,
     }));
 
+  /*
+   * The live lookups start here rather than after the model answers, so their latency hides
+   * inside the model call instead of being added to it. A turn that quotes a price then
+   * costs what it did before rather than half a second more.
+   */
+  prefetchLive(brand, retrieval);
+
   // --- model call
   const provider = getProvider();
   const response = await provider.call({
@@ -167,6 +266,14 @@ export async function runTurn(opts: {
     ? { level: 'warn', code: 'OUTPUT_RECOVERED', detail: parsed.recovered }
     : null;
 
+  /*
+   * --- live truth, before the rails judge the reply
+   *
+   * Only for products the model actually asked us to price. A turn that recommends without
+   * quoting — most turns — makes no network call and costs exactly what it did before.
+   */
+  const live = await resolveLivePrices(brand, parsed.reply ?? '', retrieval.products);
+
   // --- post-model rails
   const post = runPostRails(parsed, {
     catalog: retrieval.products,
@@ -182,16 +289,52 @@ export async function runTurn(opts: {
       ...retrieval.groundTruth.map((d) => d.text),
       ...retrieval.policies.map((p) => p.text),
     ].join('\n'),
+    livePrices: live.prices,
+    liveLookupMs: live.ms || undefined,
   });
 
   if (recoveryEvent) post.events.unshift(recoveryEvent);
 
-  // --- side effects
+  /*
+   * --- side effects
+   *
+   * A cart write asks the store whether the item can still be sold, and does not write when
+   * the answer is no. Ingest-day availability produces a checkout the customer cannot
+   * complete, which is the worst possible place to find out.
+   *
+   * A refusal here contradicts a reply that already said the item was added, so the turn
+   * escalates rather than shipping a sentence the cart disagrees with. That is the same
+   * rule `CART_MISMATCH` enforces, applied to the store's answer instead of the model's.
+   */
   const index = buildIndex(retrieval.products);
+  let stockRefused = false;
   for (const action of post.actions) {
     if (action.type !== 'add_to_cart') continue;
     const product = index.get(actionKey(action));
-    if (product) addToCart(customer.id, product.id, action.qty ?? 1);
+    if (!product) continue;
+
+    const write = await writeCart({
+      domain: brand.domain,
+      ingestPath: brand.ingest_path,
+      customerId: customer.id,
+      product,
+      qty: action.qty ?? 1,
+    });
+
+    if (write.value.written) {
+      if (write.source === 'live') {
+        post.events.push({ level: 'pass', code: 'STOCK_LIVE', detail: write.detail });
+      }
+    } else {
+      stockRefused = true;
+      post.events.push({ level: 'block', code: 'STOCK_DRIFT', detail: write.detail });
+    }
+  }
+
+  if (stockRefused) {
+    post.reply = ESCALATION_REPLY;
+    post.escalated = true;
+    post.blockCheckout = true;
   }
 
   for (const fact of parsed.learned ?? []) {
