@@ -19,6 +19,8 @@ export type CartView = {
   permalink: string | null;
   /** 'store' when the store priced it, 'catalog' when we constructed the handoff. */
   pricedBy: 'store' | 'catalog';
+  /** Why the store did not price it, when it did not. */
+  pricingNote?: string;
 };
 
 function openCart(customerId: string): string {
@@ -125,7 +127,7 @@ export async function getCartPriced(
     };
   }
 
-  const priced = await priceCartViaMcp(
+  const { cart: priced, error } = await priceCartViaMcp(
     domain,
     local.lines
       .filter((l) => l.variant_id)
@@ -133,7 +135,7 @@ export async function getCartPriced(
     // Deliberately not continuing the previous cart — see above.
     null,
   );
-  if (!priced) return local;
+  if (!priced) return { ...local, pricingNote: error };
 
   db.prepare(
     `update cart set remote_cart_id = ?, remote_total_cents = ?, remote_discounts_json = ?,

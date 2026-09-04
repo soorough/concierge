@@ -75,8 +75,8 @@ export async function priceCartViaMcp(
   domain: string,
   lines: { variantId: string; quantity: number }[],
   cartId?: string | null,
-): Promise<McpCart | null> {
-  if (!lines.length) return null;
+): Promise<{ cart: McpCart | null; error?: string }> {
+  if (!lines.length) return { cart: null, error: 'no lines' };
 
   try {
     const result = await rpc<{ content: { text: string }[] }>(
@@ -93,13 +93,15 @@ export async function priceCartViaMcp(
     );
 
     const text = result.content?.[0]?.text;
-    if (!text) return null;
+    if (!text) return { cart: null, error: 'empty content' };
     const payload = JSON.parse(text) as { cart?: Record<string, unknown> };
     const cart = (payload.cart ?? payload) as Record<string, any>;
-    if (!cart?.id || !cart?.checkout_url) return null;
+    if (!cart?.id || !cart?.checkout_url) {
+      return { cart: null, error: `no cart in response: ${text.slice(0, 120)}` };
+    }
 
     const cartLines = (cart.lines ?? []) as any[];
-    return {
+    const built: McpCart = {
       cartId: String(cart.id),
       checkoutUrl: String(cart.checkout_url),
       subtotalCents: toCents(cart.cost?.subtotal_amount?.amount),
@@ -117,8 +119,13 @@ export async function priceCartViaMcp(
         totalCents: toCents(l.cost?.total_amount?.amount),
       })),
     };
-  } catch {
-    // Any failure falls back to the constructed permalink rather than blocking a checkout.
-    return null;
+    return { cart: built };
+  } catch (e) {
+    /*
+     * A failure falls back to the constructed permalink rather than blocking a checkout,
+     * but it says why. A silent catch here hid a production-only failure behind a card that
+     * looked merely conservative.
+     */
+    return { cart: null, error: `${(e as Error).name}: ${(e as Error).message.slice(0, 160)}` };
   }
 }
