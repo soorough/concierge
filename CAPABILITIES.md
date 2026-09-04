@@ -30,6 +30,7 @@ forever.
 | Incumbent SMS vendor | Attentive, Postscript, Klaviyo, Emotive, Yotpo detected from script tags |
 | Sellability filtering | Price, availability and per-brand type denylist. ONEHOPE: 121 products → 97 sellable, 24 excluded |
 | Honest gap reporting | Every page it could not find is listed by name and candidate URL |
+| Promotions | Percentage and free-shipping offers stated on the brand's site are captured, quotable by the agent, and shown on the checkout card as applying at checkout |
 | Preflight classification | `shopify` / `crawl` / `blocked` in about a second, with the bot wall named |
 | Caching | Results cached per domain with the ingest timestamp shown and a re-ingest button that genuinely re-runs |
 | Currency validation | The shop's own currency is read from `/meta.json` and checked against what the storefront served; a mismatch aborts rather than storing wrong prices |
@@ -73,7 +74,7 @@ Every rail below is deterministic and fires whatever the model produced.
 |---|---|
 | `PRICE_RESOLVED` | Prices come from the database; the model emits a token |
 | `UNGROUNDED_PRICE` | Any price the model wrote itself, digits or spelled out |
-| `UNAUTHORIZED_OFFER` | Discounts, coupons, promo codes, percentages off |
+| `UNAUTHORIZED_OFFER` | Inventing a discount. The brand's own stated promotions pass as `OFFER_AUTHORISED` |
 | `UNGROUNDED_SHIPPING_CLAIM` | Promising delivery to a place no policy mentions |
 | `UNGROUNDED_DELIVERY_CLAIM` | Promising a timeframe no policy supports |
 | `HEALTH_CLAIM` | Medical, scientific or regulatory assertions — asserted *or denied* |
@@ -145,6 +146,9 @@ Things that work but are not solid, listed so they are not discovered by a custo
 - **Arithmetic over policy.** Asked how many states it ships to, the agent has answered
   both "43" and "44" in different turns. The list is ground truth; the count is the model
   counting, and nothing checks it.
+- **Cart totals are list prices.** A storefront's product feed does not carry automatic
+  promotions, so the card shows the subtotal before them and says so. It cannot show the
+  figure the customer will actually be charged.
 - **Derived delivery estimates.** "1–3 days processing plus 3–7 days shipping, so roughly
   6–10 business days" is arithmetic, not policy. The delivery rail checks that the numbers
   appear in the policy text, which a derived figure can satisfy coincidentally.

@@ -617,3 +617,44 @@ for (const [raw, expected] of [
     },
   });
 }
+
+RAIL_CASES.push(
+  {
+    /*
+     * Regression. ONEHOPE runs "15% off sitewide", announced on their homepage and applied
+     * automatically at checkout. The agent denied any discount existed and the checkout card
+     * showed $20.00 against a real charge of $17.00.
+     */
+    name: "an offer the brand states on its own site is allowed",
+    run: () => {
+      const r = runPostRails(
+        out({ reply: "We've got 15% off sitewide running through September 11." }),
+        ctx({ authorisedOffers: ['15% off sitewide through September 11'] }),
+      );
+      return {
+        pass: fired(r.events, 'OFFER_AUTHORISED') && /15% off sitewide/.test(r.reply),
+        got: r.reply,
+      };
+    },
+  },
+  {
+    name: 'an invented discount is still blocked when real offers exist',
+    run: () => {
+      const r = runPostRails(
+        out({ reply: "Sure, I'll give you 40% off today." }),
+        ctx({ authorisedOffers: ['15% off sitewide through September 11'] }),
+      );
+      return {
+        pass: fired(r.events, 'UNAUTHORIZED_OFFER') && !/40%/.test(r.reply) && /15% off sitewide/.test(r.reply),
+        got: r.reply,
+      };
+    },
+  },
+  {
+    name: 'with no stated offers, any discount is refused',
+    run: () => {
+      const r = runPostRails(out({ reply: "Here's 15% off." }), ctx({ authorisedOffers: [] }));
+      return { pass: fired(r.events, 'UNAUTHORIZED_OFFER') && !/15%/.test(r.reply), got: r.reply };
+    },
+  },
+);

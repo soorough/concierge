@@ -194,17 +194,43 @@ async function fetchPolicies(domain: string, onProgress: OnProgress) {
   return { found, missing };
 }
 
-/** Only what is stated on-site. Everything the agent might otherwise offer is unauthorised. */
+/**
+ * Promotions the brand states on its own site. Everything else is unauthorised.
+ *
+ * This used to look only for free-shipping thresholds, which meant ONEHOPE's "15% off
+ * sitewide through September 11" — announced on their homepage and applied automatically at
+ * checkout — was invisible. The agent then told customers there were no discounts while the
+ * brand was running one, understating them and contradicting their own front page.
+ */
+const OFFER_PATTERNS: RegExp[] = [
+  // "15% off sitewide", "Up to 20% Off + Free Shipping", "50% off The Harvest Table Trio"
+  /(?:up to\s+)?\d{1,2}\s?%\s+off[^.\n|]{0,60}/gi,
+  // "Free shipping over $75"
+  /free\s+(?:standard\s+)?shipping\s+(?:on\s+)?(?:orders\s+)?(?:over|above|of)\s+\$?\d{2,4}/gi,
+];
+
+const OFFER_NOISE = /\b(cookie|privacy|terms|unsubscribe|sign in|log in)\b/i;
+
 function extractOffers(sources: string[]): { offers: string[]; freeShipThreshold?: number } {
   const offers = new Set<string>();
   let threshold: number | undefined;
+
   for (const src of sources) {
+    for (const pattern of OFFER_PATTERNS) {
+      for (const m of src.matchAll(pattern)) {
+        const text = m[0].replace(/\s+/g, ' ').trim().replace(/[,;]$/, '');
+        if (text.length < 6 || text.length > 90 || OFFER_NOISE.test(text)) continue;
+        offers.add(text);
+      }
+    }
     for (const m of src.matchAll(/free\s+(?:standard\s+)?shipping\s+(?:on\s+)?(?:orders\s+)?(?:over|above|of)\s+\$?(\d{2,4})/gi)) {
       threshold = Math.min(threshold ?? Infinity, Number(m[1]) * 100);
-      offers.add(`Free shipping over $${m[1]}`);
     }
   }
-  return { offers: [...offers], freeShipThreshold: threshold };
+
+  // Longest first: "15% off sitewide through September 11" beats a bare "15% off".
+  const ranked = [...offers].sort((a, b) => b.length - a.length).slice(0, 6);
+  return { offers: ranked, freeShipThreshold: threshold };
 }
 
 function extractRestrictedRegions(policyText: string): string[] {
@@ -281,7 +307,10 @@ export async function ingestShopify(domain: string, onProgress: OnProgress): Pro
   }
 
   const policyText = policies.map((p) => p.text).join('\n');
-  const { offers, freeShipThreshold } = extractOffers([meta.html, policyText]);
+  const { offers, freeShipThreshold } = extractOffers([stripHtml(meta.html), policyText]);
+  if (offers.length) {
+    onProgress({ type: 'stage', stage: 'offers', detail: offers.slice(0, 3).join(' · ') });
+  }
   const restrictedRegions = extractRestrictedRegions(policyText);
   const category = classifyCategory(meta.html, products.map((p) => p.title));
 

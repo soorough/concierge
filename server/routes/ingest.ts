@@ -61,6 +61,7 @@ export async function registerIngestRoutes(app: FastifyInstance) {
       ...brand,
       palette: JSON.parse(brand.palette_json ?? '[]'),
       restrictedRegions: JSON.parse(brand.restricted_regions_json ?? '[]'),
+      offers: JSON.parse(brand.offers_json ?? '[]'),
       missing: JSON.parse(brand.missing_json ?? '[]'),
       counts,
     };

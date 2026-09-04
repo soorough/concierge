@@ -124,10 +124,12 @@ export async function runTurn(opts: {
   // --- retrieval
   const retrieval = retrieve({ brandId: brand.id, customerId: customer.id, message: text });
 
+  const offers = JSON.parse(brand.offers_json ?? '[]') as string[];
+
   const system = buildSystemBlocks({
     brand,
     retrieval,
-    offers: JSON.parse(brand.offers_json ?? '[]') as string[],
+    offers,
     restrictedRegions: JSON.parse(brand.restricted_regions_json ?? '[]') as string[],
     ageVerified: Boolean(customer.age_verified_at),
   });
@@ -175,6 +177,7 @@ export async function runTurn(opts: {
     customerRegion: customer.region,
     priceOrdered: retrieval.priceOrdered,
     currency: brand.currency ?? 'USD',
+    authorisedOffers: offers,
     policyText: [
       ...retrieval.groundTruth.map((d) => d.text),
       ...retrieval.policies.map((p) => p.text),

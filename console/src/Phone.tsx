@@ -138,6 +138,13 @@ export function Phone({
               <b>{money(cart.subtotalCents, cart.currency)}</b>
             </div>
 
+            {/* A storefront's product feed carries list prices; automatic promotions are
+                applied at checkout. Saying so is better than showing a total the customer
+                will not be charged. */}
+            {brand.offers.length > 0 && (
+              <div className="card__promo">{brand.offers[0]} — applied at checkout</div>
+            )}
+
             {cart.permalink && (
               <a className="card__cta" href={cart.permalink} target="_blank" rel="noreferrer">
                 Continue to checkout →

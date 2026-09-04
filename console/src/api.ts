@@ -1,7 +1,7 @@
 export type Brand = {
   id: string; domain: string; name: string; category: string;
   ingest_path: string; detected_sms_vendor: string | null;
-  logo_url: string | null; palette: string[]; missing: string[];
+  logo_url: string | null; palette: string[]; missing: string[]; offers: string[];
   restrictedRegions: string[]; free_ship_threshold: number | null;
   ingested_at: number;
   counts: { sellable: number; total: number; policies: number };

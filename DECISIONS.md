@@ -368,7 +368,29 @@ objected to, which is not the same as a turn that was right. Closing that needs 
 model over sampled turns, a golden set replayed against the live config, or human review.
 Naming the gap is worth more than a number that implies it is covered.
 
-## What I'd change with a month
+## 26. Refusing a real discount is also a wrong answer
+
+Following the cart handoff to ONEHOPE's own checkout showed a $20.00 bottle charged at
+$17.00: they run "15% off sitewide", announced on their homepage and applied automatically.
+The agent had just told the customer *"I can't put together a discount"*, and the checkout
+card showed a subtotal the customer would not be charged.
+
+Two causes, both mine. Offer extraction looked only for free-shipping thresholds, so the
+brand's actual promotions were invisible — ingest reported "no on-site offers" and the agent
+faithfully acted on it. And the offer rail blocked any percentage at all, which was correct
+while nothing could be authorised and wrong the moment something could.
+
+The rail now blocks *inventing* an offer rather than *mentioning* one: a percentage backed by
+the brand's own stated promotions passes as `OFFER_AUTHORISED`, anything else is blocked and
+the reply names a real offer instead of denying all of them.
+
+The checkout card says the subtotal is before automatic discounts, because a product feed
+carries list prices and promotions are applied at checkout. Showing a total the customer will
+not be charged is worse than saying which number this is.
+
+The wider point is one this project keeps arriving at from different directions: a guardrail
+tuned to what the system could see at the time becomes a source of wrong answers when the
+system can see more. Rails need to be re-read whenever ingest gets better.
 
 Hybrid retrieval past a few thousand SKUs. A classifier pass for sellability instead of a
 per-brand denylist. A real channel adapter with the brand's own credentials entered per

@@ -71,6 +71,8 @@ export type PostRailContext = {
   customerRegion: string | null;
   /** ISO code the brand prices in. Prices are rendered in it, never in a fixed symbol. */
   currency?: string;
+  /** Promotions the brand states on its own site. Anything else is unauthorised. */
+  authorisedOffers?: string[];
   /** When true, a price ranking is verifiable from what the model was given. */
   priceOrdered?: boolean;
   /** Policy text actually retrieved this turn, used to ground policy assertions. */
@@ -319,13 +321,41 @@ export function runPostRails(output: ModelOutput, ctx: PostRailContext): PostRai
     });
   }
 
-  // 5. Offers. Only what is on-site is authorised.
+  /*
+   * 5. Offers. Only what the brand states on its own site is authorised.
+   *
+   * The rail used to block any percentage, which was right when ingest could not find
+   * offers and wrong the moment it could: ONEHOPE runs "15% off sitewide", announced on
+   * their homepage and applied automatically at checkout, and an agent that denies it is
+   * understating the brand to its own customer. What is forbidden is inventing one.
+   */
   const offer = reply.match(OFFER);
   if (offer) {
-    events.push({ level: 'block', code: 'UNAUTHORIZED_OFFER', detail: `matched "${offer[0]}"` });
-    reply =
-      "I can't put together a discount, but I'm happy to help you find something that fits what you're after.";
-    actions = actions.filter((a) => a.type !== 'show_checkout');
+    const authorised = ctx.authorisedOffers ?? [];
+    const claimedPercent = offer[0].match(/(\d{1,2})\s?%/)?.[1];
+    const backed = authorised.some((a) => {
+      const lower = a.toLowerCase();
+      if (claimedPercent && lower.includes(`${claimedPercent}%`)) return true;
+      return lower.includes(offer[0].toLowerCase().trim());
+    });
+
+    if (backed) {
+      events.push({
+        level: 'pass',
+        code: 'OFFER_AUTHORISED',
+        detail: `"${offer[0].trim()}" is stated on the brand's site`,
+      });
+    } else {
+      events.push({
+        level: 'block',
+        code: 'UNAUTHORIZED_OFFER',
+        detail: `"${offer[0].trim()}" is not among the brand's stated offers`,
+      });
+      reply = authorised.length
+        ? `I can't create a discount, but ${authorised[0]} is running at the moment.`
+        : "I can't put together a discount, but I'm happy to help you find something that fits what you're after.";
+      actions = actions.filter((a) => a.type !== 'show_checkout');
+    }
   }
 
   /*
