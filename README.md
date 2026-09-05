@@ -85,7 +85,7 @@ supersedes the note and keeps both visible.
   a message ─► pre-rails ─► retrieval ─► route ─┬─► one model call ──────────┐
                   │              │              │                            │
              no model call   whole catalog      └─► model ⇄ tools ───────────┤
-             for STOP/HELP   policy, cached         budget 3, then escalate  │
+             for STOP/HELP   policy, cached         one at a time, budget 3  │
                                                                              ▼
                                               live lookup ─► post-rails ─► side effects
                                                    │              │

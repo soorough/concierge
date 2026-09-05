@@ -9,6 +9,54 @@ const money = (cents: number, currency = 'USD') => {
   }
 };
 
+/**
+ * The shape every reply must take, enforced by the API rather than asked for in prose.
+ *
+ * The prompt still describes this below, because the model reasons better when it knows why
+ * the fields exist. The schema is what makes a non-conforming reply impossible.
+ *
+ * Kept deliberately loose on `actions`: a rail rejects an action naming a product the model
+ * was never shown, and rejecting it there produces a `CART_REJECTED` event somebody can
+ * read. A schema violation produces nothing to look at.
+ */
+export const OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    actions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['add_to_cart', 'remove_from_cart', 'show_checkout'] },
+          ref: { type: ['integer', 'string', 'null'] },
+          sku: { type: ['string', 'null'] },
+          qty: { type: ['integer', 'null'] },
+        },
+        required: ['type'],
+        additionalProperties: false,
+      },
+    },
+    learned: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          predicate: { type: 'string' },
+          object: { type: 'string' },
+          confidence: { type: ['number', 'null'] },
+        },
+        required: ['predicate', 'object'],
+        additionalProperties: false,
+      },
+    },
+    needs_age_check: { type: 'boolean' },
+    escalate: { type: ['string', 'null'] },
+  },
+  required: ['reply', 'actions', 'learned', 'needs_age_check', 'escalate'],
+  additionalProperties: false,
+};
+
 export type SystemBlocks = {
   /** Byte-identical for every turn of a brand, so it can be cached. */
   stable: string;
@@ -170,11 +218,10 @@ was ingested, so a price or an availability in it may be out of date. Call a too
 answer has to be true *now* — a budget, a comparison, a ranking, or anything the customer
 intends to buy today. Do not call one to repeat something already written above.
 
-You have **${opts.toolBudget ?? 3} tool calls** for this whole turn, and asking for more than
-that ends the turn and hands the customer to a human. So spend them on what actually decides
-your answer. If a question would need more than you have — say, checking six products one by
-one — narrow it first: pick the two or three that matter and answer from those, or ask the
-customer a question that narrows it for you.
+You get one tool call at a time, and **${opts.toolBudget ?? 3} in total** for this turn.
+Spending them all without reaching an answer hands the customer to a human, so spend them on
+what actually decides your reply. If a question would need more than you have, answer from
+the two or three that matter most, or ask the customer something that narrows it.
 `
       : ''
   }

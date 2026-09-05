@@ -50,7 +50,8 @@ forever.
 | Cart | Add, change quantity, remove, live subtotal computed from database prices. Where the store prices the cart, its confirmed lines are compared against ours and a disagreement withholds the checkout card |
 | Tool use | Three tools reach what the prompt cannot: the live store's price, the live store's stock, and the `terms` policy text that retrieval excludes from every turn |
 | Routed loop | A deterministic router decides per turn whether tools are worth offering. Price, availability, terms, intent to buy, or an open cart get a loop; everything else keeps the single constrained call |
-| Tool budget | Three calls per turn (`TOOL_CALL_BUDGET`), named in the prompt so the model paces itself. Asking for more ends the turn and escalates |
+| Tool budget | Three calls per turn (`TOOL_CALL_BUDGET`), named in the prompt so the model paces itself. Calls arrive one at a time, so the model knows what it learned before asking for more; spending the budget without an answer escalates |
+| Output shape | A JSON Schema enforces the reply on the loop path, where a prefill cannot go; the single-call path keeps the prefill, which is free and never failed there |
 | Trajectory record | Every tool call persisted with its order, arguments, result, provenance and duration, queryable and shown in the console beside that turn's own cost and latency |
 | Checkout handoff | The store prices the cart over its own MCP endpoint where available — real totals, named discounts and a genuine checkout URL — falling back to a constructed cart permalink where it is not |
 | Storefront MCP | `/api/mcp` tools discovered at ingest and recorded per brand; 3 of 4 brands tested expose cart tools, 1 exposes only policy search |
@@ -166,15 +167,17 @@ Things that work but are not solid, listed so they are not discovered by a custo
   exposes `update_cart` the card shows the real total and the discounts by name. Where it
   does not, the subtotal is list price and the card says promotions apply at checkout.
 - **A loop turn costs about three times a single-call turn, and takes about twice as long.**
-  Measured on ONEHOPE: 0.218¢ and 1,978ms on the single-call path against 0.65–0.75¢ and
-  3.3–4.9s with a loop. Two sequential model calls cannot happen inside two seconds. The
+  Measured on ONEHOPE: 0.214¢ and 2,230ms on the single-call path against 0.58–1.24¢ and
+  4.1–8.4s with a loop. Two sequential model calls cannot happen inside two seconds. The
   router keeps most traffic on the cheap path and the console shows the difference per turn
   rather than averaging it away, but the `SPEC.md` §3 p50 target describes the single-call
   path only.
-- **The tool budget is respected by persuasion, not enforcement.** The cap is hard — asking
-  for more ends the turn — but whether the model narrows to fit is a matter of it reading the
-  prompt. On a question deliberately built to strain a budget of three, three runs in four
-  narrowed and answered; the fourth over-asked and escalated.
+- **The router is a set of text patterns, and real customers do not phrase things like test
+  cases.** It is deterministic and readable, which is why it was chosen over a model call,
+  but it will miss phrasings nobody thought of. The failure is mild rather than dangerous: a
+  missed route makes the agent reason over the ingest snapshot, and never makes it quote a
+  stale price, because prices are resolved live regardless. Worth watching in the rail log
+  rather than assumed correct.
 - **A refused cart write escalates after the fact.** Availability is checked with the store
   before the line is written, so a sold-out item never reaches a cart. But the reply has
   already been written by then, so the turn returns the generic escalation sentence rather

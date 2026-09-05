@@ -90,6 +90,16 @@ export class AnthropicProvider implements Provider {
             })),
           }
         : {}),
+      ...(req.outputSchema
+        ? {
+            output_config: {
+              format: { type: 'json_schema' as const, schema: req.outputSchema },
+            },
+          }
+        : {}),
+      ...(req.tools?.length && req.oneToolAtATime
+        ? { tool_choice: { type: 'auto' as const, disable_parallel_tool_use: true } }
+        : {}),
       messages: req.prefill
         ? [...messages, { role: 'assistant' as const, content: req.prefill }]
         : messages,

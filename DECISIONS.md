@@ -573,28 +573,17 @@ turn with `{` is accepted by the API and produces the worst of both: the model w
 half-formed JSON object **and** a tool call in the same response, having been pulled in two
 directions.
 
-The prefill is what makes a JSON reply structurally the only option, and refusals in
-particular tend to drop out of a requested format when it is merely asked for. So this is
-the second reason the router exists: a turn that gains nothing from tools should not pay for
-them in output discipline either. Turns that do get tools return fenced JSON instead, which
-the existing fence-stripping in `parseModelOutput` already handles — verified, not hoped.
+That is a real constraint on the prefill, but it is *not* a reason to route — see §32, which
+corrects what this entry originally claimed. The loop gets its JSON from a schema instead.
 
 ### The budget has to be told to the model
 
-Three calls per turn, configurable by `TOOL_CALL_BUDGET`. A cap alone was not enough. Asked
-to compare three wines *and* check stock, the model asked for six tools at once and blew the
-budget before a single call ran — the cap fired, correctly, on a question it could have
-answered.
+Three calls per turn, configurable by `TOOL_CALL_BUDGET`, and named in the prompt so the
+model can pace itself. A cap it cannot see is a cap it walks into.
 
-Naming the budget in the prompt fixed it: it now narrows to three and answers. On four runs
-of that deliberately awkward question, three narrowed and one still over-asked and escalated.
-That residual rate is the honest number, and escalating is the specified behaviour, not a
-failure.
-
-The cap is checked against what the model is *asking for*, not what it has already spent, so
-a turn is never left half-informed. Either every tool in a round runs or none does and a
-human is asked. Answering with two thirds of the information the model said it needed is the
-failure mode worth avoiding.
+The first version also took whole rounds or nothing, because the model would ask for six
+tools at once and blow a budget of three before a call ran. That was a workaround for a
+problem the API already solves — see §32.
 
 ### The tool surface is smaller than the callable surface
 
@@ -640,6 +629,93 @@ The endpoint is OpenAI-compatible and does expose function calling, but there is
 this environment to verify it against, so `DeepSeekProvider.supportsTools` is `false` and a
 turn on DeepSeek takes the single constrained call. Every rail still runs. Claiming support
 that has never executed would be the same defect as §29 — a step that cannot fail loudly.
+
+## 32. I wrote the routing decision before reading the tool-use documentation
+
+§31 gave two reasons for routing turns away from the loop. One was cost. The other was that
+tools and the `{` prefill cannot be combined, so a turn that gained nothing from tools should
+not lose the JSON guarantee to them.
+
+The second reason was wrong, and the way it was wrong is the shape this project keeps
+meeting. I reached the conclusion by testing two things I already knew about — prefill, and
+tools — against each other, and never asked what else the API offered. It offered two things,
+both of which were in the documentation the whole time.
+
+This is §27 again. Shopify had an MCP endpoint I did not look for; the Messages API had
+structured outputs and `disable_parallel_tool_use`, and I did not look for those either. Both
+times the missing step was the same: I tested my own idea instead of reading first.
+
+### Structured outputs replace the prefill, and work alongside tools
+
+`output_config.format` constrains the response to a JSON Schema, is supported on Haiku 4.5,
+and coexists with `tools` — verified, including the case that matters most, a refusal, which
+is exactly where a merely-requested format is lost.
+
+So the loop does not need the prefill and never did. The correctness argument for routing
+evaporates.
+
+### `disable_parallel_tool_use` makes the budget mean what it says
+
+One tool per response, on any `tool_choice`. The model asking for four calls at once —
+measured — is what forced the all-or-nothing round, and a flag removes the reason for it.
+Calls now arrive one at a time, the budget is spent one at a time, and the model knows what
+it learned before it asks for more.
+
+Measured over four runs of the awkward question, against the parallel version:
+
+| | model calls | tool calls | cost | budget exhausted |
+|---|---|---|---|---|
+| One at a time | 2.5 | 1.5 | 0.776¢ | **0 of 4** |
+| Parallel | 2.0 | 3.0 | 0.723¢ | 1 of 4 |
+
+Serial costs half a model call more and uses *half* the tool calls, because a model that
+learns after each call often stops early — three of four runs answered from one lookup, where
+the parallel version always asked for three up front. It also stopped escalating. Reacting to
+what you found is the whole point of a loop, and asking for everything at once is not that.
+
+### Which is a better reason to route than the one I gave
+
+With correctness settled, the question became purely empirical: left free to choose, does the
+model call tools when it does not need them?
+
+Eight questions the ingested catalog fully answers — pairings, gifts, styles, a thank-you —
+offered all three tools with the real prompt. **Five of the eight called a tool anyway**, two
+of them three times, to fetch prices for a question about what goes with steak.
+
+So the router earns its place, on cost, measurably. That is the reason. What I wrote in §31
+was a rationalisation that happened to reach the right structure.
+
+The failure mode is also mild in a way I should have said: a router false negative costs
+almost nothing, because §30 already resolves every quoted price against the live store
+regardless of whether a tool ran. The tool path is for *reasoning* over live data — rankings,
+comparisons, stock before a recommendation — not for quoting. A missed route makes the agent
+reason over a snapshot; it never makes it quote a stale price.
+
+### Where each JSON mechanism actually belongs
+
+Having found the schema, the temptation was to use it everywhere and delete the prefill.
+Measuring stopped that:
+
+| Path | Mechanism | Median latency | Parse failures |
+|---|---|---|---|
+| Single call | prefill `{` | 1,992ms | 0 of 5 |
+| Single call | schema | 3,932ms | 0 of 5 |
+| Loop, tool-calling leg | schema | 1,420ms | — |
+| Loop, tool-calling leg | neither | 1,415ms | — |
+| Loop, answering leg | schema | 2,294ms | 0 |
+| Loop, answering leg | neither | 1,809ms | **4 of 4** |
+
+Constraining generation is not free, and the price is not flat — it scales with the tokens
+being constrained. A "what goes with a ribeye" answer is discursive and pays about 1.9s; a
+price answer is short and pays about 485ms; a leg that emits only a tool call pays nothing.
+
+So each path keeps the mechanism that suits it. The single call keeps the prefill, which is
+free and has never failed there. The loop takes the schema, which it cannot do without — four
+attempts out of four failed to parse when it was removed.
+
+The general lesson is the one §29 keeps circling. My own reasoning deserves the same suspicion
+as the model's output: a conclusion I reached by experiment is only as good as the range of
+options I bothered to put in the experiment.
 
 ## What I'd change with a month
 
